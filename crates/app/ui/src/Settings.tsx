@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
 import {
-  Alert,
   Button,
   Card,
   Group,
@@ -22,12 +21,17 @@ interface ConfigDto {
   crash_reports_opt_in: boolean;
 }
 
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
 export default function Settings() {
   const [gameExe, setGameExe] = useState<string>("");
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [status, setStatus] = useState<SaveStatus>("idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Skip the auto-save effect until the initial load has populated state.
+  const loadedRef = useRef(false);
 
   useEffect(() => {
     invoke<ConfigDto>("get_config")
@@ -35,9 +39,33 @@ export default function Settings() {
         setGameExe(cfg.game_exe ?? "");
         setStrategy(cfg.strategy_override ?? "auto");
         setCrashReports(cfg.crash_reports_opt_in);
+        loadedRef.current = true;
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => notifications.show({ color: "red", title: "Load failed", message: String(e) }));
   }, []);
+
+  // Auto-save: debounced so typing a path doesn't fire per keystroke.
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    const t = setTimeout(async () => {
+      setStatus("saving");
+      try {
+        await invoke("save_config", {
+          gameExe: gameExe === "" ? null : gameExe,
+          strategyOverride: strategy === "auto" ? null : strategy,
+          crashReportsOptIn: crashReports,
+        });
+        setStatus("saved");
+        setErrorMsg(null);
+      } catch (e) {
+        // Keep the typed value visible; the inline warning explains why it
+        // is not persisted yet. Config still holds the last valid state.
+        setStatus("error");
+        setErrorMsg(String(e));
+      }
+    }, 700);
+    return () => clearTimeout(t);
+  }, [gameExe, strategy, crashReports]);
 
   const browse = async () => {
     const selected = await open({
@@ -48,36 +76,9 @@ export default function Settings() {
     if (selected) setGameExe(selected);
   };
 
-  const save = async () => {
-    setError(null);
-    try {
-      await invoke("save_config", {
-        gameExe: gameExe === "" ? null : gameExe,
-        strategyOverride: strategy === "auto" ? null : strategy,
-        crashReportsOptIn: crashReports,
-      });
-      // Reload what the backend actually stored — never trust the optimistic
-      // form state (a rejected path must not linger in the field).
-      const cfg = await invoke<ConfigDto>("get_config");
-      setGameExe(cfg.game_exe ?? "");
-      setStrategy(cfg.strategy_override ?? "auto");
-      setCrashReports(cfg.crash_reports_opt_in);
-      notifications.show({ color: "green", message: "Settings saved." });
-    } catch (e) {
-      setError(String(e));
-      notifications.show({ color: "red", title: "Could not save", message: String(e) });
-    }
-  };
-
   return (
     <Stack p="lg" gap="lg" maw={640}>
       <Title order={2}>Settings</Title>
-
-      {error && (
-        <Alert color="red" title="Could not save">
-          {error}
-        </Alert>
-      )}
 
       <Card withBorder>
         <Stack gap="sm">
@@ -86,6 +87,7 @@ export default function Settings() {
             placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
             value={gameExe}
             onChange={(e) => setGameExe(e.currentTarget.value)}
+            error={status === "error" ? errorMsg : undefined}
           />
           <Group gap="xs">
             <Button variant="light" size="xs" onClick={browse}>
@@ -109,6 +111,16 @@ export default function Settings() {
             >
               Auto-detect
             </Button>
+            {status === "saving" && (
+              <Text size="xs" c="dimmed">
+                Saving…
+              </Text>
+            )}
+            {status === "saved" && (
+              <Text size="xs" c="dimmed">
+                Saved ✓
+              </Text>
+            )}
           </Group>
           <Select
             label="Switch strategy"
@@ -131,9 +143,6 @@ export default function Settings() {
               StarVault CCM 0.1.0 · unofficial builds must self-declare
             </Text>
           </Group>
-          <Button onClick={save} w="fit-content">
-            Save
-          </Button>
         </Stack>
       </Card>
 
@@ -141,8 +150,8 @@ export default function Settings() {
         <Stack gap="sm">
           <Text fw={500}>Danger zone</Text>
           <Text size="sm" c="dimmed">
-            Removes every imported package, the ledger, the log, and your settings. Your game
-            install is not touched. This cannot be undone.
+            Removes every imported package, the ledger, the log, and your
+            settings. Your game install is not touched. This cannot be undone.
           </Text>
           <Button color="red" variant="light" w="fit-content" onClick={() => setConfirmClear(true)}>
             Clear all data…
@@ -158,8 +167,9 @@ export default function Settings() {
       >
         <Stack gap="sm">
           <Text size="sm">
-            Every imported package, the log, and your settings will be deleted. Slots currently
-            active in the game directory stay as they are until you restore them.
+            Every imported package, the log, and your settings will be deleted.
+            Slots currently active in the game directory stay as they are until
+            you restore them.
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setConfirmClear(false)}>
