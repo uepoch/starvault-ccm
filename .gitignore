@@ -1,0 +1,18 @@
+# Build artifacts
+/target/
+crates/*/target/
+
+# Node / frontend
+node_modules/
+webui/dist/
+
+# Reference material and large local fixtures — never commit
+/old-reference/
+*.zip
+*.MPQ
+*.SC2Mod
+*.SC2Map
+
+# Local config
+.DS_Store
+Thumbs.db

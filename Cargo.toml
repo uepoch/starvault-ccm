@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/core"]
+# M2 adds: "crates/app"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["StarVault CCM contributors"]
+
+[workspace.dependencies]
+thiserror = "2"
+
+# M1 dependencies (added as modules land):
+# sha2, hex, rusqlite (bundled), serde, toml, walkdir, rayon
