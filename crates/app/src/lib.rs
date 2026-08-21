@@ -25,6 +25,7 @@ pub fn run() {
             commands::restore_campaign,
             commands::read_log,
             commands::reconcile,
+            commands::discover_game_exe,
             commands::launch_preflight,
             commands::launch_game,
             commands::launch_battlenet,

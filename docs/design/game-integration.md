@@ -64,3 +64,27 @@ reconciliation treats unexpected foreign files inside slot directories as
 drift: reported, not auto-deleted. `Mods\` entries owned by us are verified
 against the ledger; unowned entries are ignored (we are a guest in Blizzard's
 directory).
+
+## Campaign lifecycle (confirmed against the real game)
+
+One game, one main menu. Clicking Campaign shows four faction entries
+(Wings of Liberty / Heart of the Swarm / Legacy of the Void / Nova Covert
+Ops). Selecting a faction and starting a campaign makes the game load that
+faction's first map (e.g. WoL's `raynor01`, then the hub map) from the
+faction's content location. Nothing auto-starts; the faction entry *is* the
+loader.
+
+Consequences:
+
+- Activating a package replaces the entrypoint of its faction: the menu
+  then leads into the custom campaign's first map instead of Blizzard's.
+  One campaign per faction at any time; restore hands the faction back.
+- Saves are bound to the exact map and its dependencies. Swapping a
+  faction's entrypoint strands that campaign's in-progress saves; the game
+  refuses them with a map-mismatch error. This is accepted behavior,
+  matching old CCM: no warning is shown (players have always lived with
+  it), but it is documented here.
+- Future idea (deferred): save-set isolation by junctioning per-campaign
+  save directories under `Documents\StarCraft II\Accounts\<hash>\Saves\`.
+  Complications: variable account hashes, OneDrive redirection, live game
+  handles. Revisit only if players ask.

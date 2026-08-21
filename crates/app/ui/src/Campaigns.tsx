@@ -105,7 +105,7 @@ interface LibraryEntry {
   slot: string;
 }
 
-const SLOT_TITLES: Record<string, string> = {
+const FACTION_TITLES: Record<string, string> = {
   wol: "Wings of Liberty",
   hots: "Heart of the Swarm",
   lotv: "Legacy of the Void",
@@ -136,7 +136,10 @@ export default function Campaigns() {
     setBusy(`activate-${slot}`);
     try {
       await invoke("activate_campaign", { slot, id });
-      notifications.show({ color: "green", message: `${id} activated on ${slot}.` });
+      notifications.show({
+        color: "green",
+        message: `${id} activated on ${FACTION_TITLES[slot] ?? slot}.`,
+      });
       refresh();
     } catch (e) {
       // Conflict errors name both packages (M5); show them as-is.
@@ -152,7 +155,10 @@ export default function Campaigns() {
     setBusy(`restore-${slot}`);
     try {
       await invoke("restore_campaign", { slot });
-      notifications.show({ color: "green", message: `${slot} restored to plain.` });
+      notifications.show({
+        color: "green",
+        message: `${FACTION_TITLES[slot] ?? slot} restored to plain.`,
+      });
       refresh();
     } catch (e) {
       setError(String(e));
@@ -181,7 +187,7 @@ export default function Campaigns() {
         {(slots ?? []).map((entry) => (
           <Card key={entry.slot} withBorder shadow="sm">
             <Stack gap="xs">
-              <Title order={4}>{SLOT_TITLES[entry.slot] ?? entry.slot}</Title>
+              <Title order={4}>{FACTION_TITLES[entry.slot] ?? entry.slot}</Title>
               <Text c={entry.pkg_id ? undefined : "dimmed"}>{entry.title}</Text>
               {entry.author && (
                 <Text size="xs" c="dimmed">
@@ -218,7 +224,7 @@ export default function Campaigns() {
       <Modal
         opened={picking !== null}
         onClose={() => setPicking(null)}
-        title={picking ? `Activate on ${SLOT_TITLES[picking]}` : ""}
+        title={picking ? `Activate on ${FACTION_TITLES[picking]}` : ""}
         size="sm"
       >
         <Grid>

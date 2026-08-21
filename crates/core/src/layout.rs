@@ -115,6 +115,39 @@ impl GameLayout for WindowsLayout {
     }
 }
 
+/// Best-effort install discovery (design §install discovery): registry
+/// probe first (Windows), then well-known folders. Returns the exe path.
+pub fn discover_install() -> Option<PathBuf> {
+    #[cfg(windows)]
+    if let Some(found) = discover_from_registry() {
+        return Some(found);
+    }
+    discover_from_common_locations()
+}
+
+/// `HKLM\Software\Classes\Blizzard.SC2Save\shell\open\command` holds
+/// `"…\Support\SC2Switcher.exe" "%1"`; two path segments up from the
+/// switcher is the install root.
+#[cfg(windows)]
+fn discover_from_registry() -> Option<PathBuf> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    let key = winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"Software\Classes\Blizzard.SC2Save\shell\open\command")
+        .ok()?;
+    let command: String = key.get_value("").ok()?;
+    let switcher = command.trim_start_matches('"').split('"').next()?;
+    let root = Path::new(switcher).parent()?.parent()?;
+    let candidate = root.join("StarCraft II.exe");
+    candidate.is_file().then_some(candidate)
+}
+
+fn discover_from_common_locations() -> Option<PathBuf> {
+    [r"C:\Program Files (x86)\StarCraft II"]
+        .into_iter()
+        .map(|d| PathBuf::from(d).join("StarCraft II.exe"))
+        .find(|p| p.is_file())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -87,11 +87,31 @@ export default function Settings() {
             value={gameExe}
             onChange={(e) => setGameExe(e.currentTarget.value)}
           />
-          <Button variant="light" size="xs" onClick={browse} w="fit-content">
-            Browse…
-          </Button>
+          <Group gap="xs">
+            <Button variant="light" size="xs" onClick={browse}>
+              Browse…
+            </Button>
+            <Button
+              variant="light"
+              size="xs"
+              onClick={async () => {
+                const found = await invoke<string | null>("discover_game_exe");
+                if (found) {
+                  setGameExe(found);
+                  notifications.show({ color: "green", message: "Found StarCraft II." });
+                } else {
+                  notifications.show({
+                    color: "yellow",
+                    message: "Could not find an SC2 install automatically — browse for it.",
+                  });
+                }
+              }}
+            >
+              Auto-detect
+            </Button>
+          </Group>
           <Select
-            label="Slot strategy"
+            label="Switch strategy"
             data={[
               { value: "auto", label: "Auto (junction first)" },
               { value: "junction", label: "Junctions" },

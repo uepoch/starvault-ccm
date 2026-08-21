@@ -557,3 +557,11 @@ pub fn migrate_candidate(
     log_op(&app, "migrate", &format!("{id} from {path}"));
     Ok(rev)
 }
+
+// --- install discovery -------------------------------------------------------
+
+/// Best-effort SC2 install detection (registry, then well-known folders).
+#[tauri::command]
+pub fn discover_game_exe() -> Option<String> {
+    svccm_core::layout::discover_install().map(|p| p.display().to_string())
+}

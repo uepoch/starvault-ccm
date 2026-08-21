@@ -224,19 +224,18 @@ export default function ImportWizard({
               />
               <div>
                 <Text size="sm" fw={500} mb={4}>
-                  Slot
+                  Faction
                   {preview.matched_pattern ? ` (matched "${preview.matched_pattern}")` : ""}
                 </Text>
                 {preview.slot_guess !== "unknown" ? (
                   <Badge size="lg" variant="light">
-                    {SLOTS.find((s) => s.value === preview.slot_guess)?.label} — this campaign only
-                    loads through its own launcher
+                    Loads via Campaign → {SLOTS.find((s) => s.value === preview.slot_guess)?.label}
                   </Badge>
                 ) : (
                   <>
                     <Text size="xs" c="dimmed" mb={4}>
-                      No detection possible — pick the campaign this package was built for. It can
-                      only ever load through that launcher.
+                      No detection possible — pick the faction this package was built for; it will
+                      load via that campaign's menu.
                     </Text>
                     <SegmentedControl data={SLOTS} value={slot} onChange={setSlot} />
                   </>
