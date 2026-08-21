@@ -119,7 +119,10 @@ pub fn import_analyze(
     }
 
     let plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
-    let preview = preview_plan(&plan);
+    let archive_name = zip_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
+    let preview = preview_plan(&plan, archive_name.as_deref());
     state.ops.lock().expect("import ops poisoned").insert(
         op_id,
         ImportOp {
@@ -140,6 +143,7 @@ pub fn import_ingest(
     op_id: String,
     id: String,
     slot: String,
+    title: Option<String>,
 ) -> Result<Option<String>, String> {
     let slot = slot_from_str(&slot)?;
     let (extracted_dir, cancel) = {
@@ -151,7 +155,11 @@ pub fn import_ingest(
     };
 
     let result = (|| {
-        let plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
+        let mut plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
+        // K2: the confirmed title wins over the detected one.
+        if let Some(t) = title {
+            plan.metadata.get_or_insert_with(Default::default).title = Some(t);
+        }
         let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
         let app_for_cb = app.clone();
         let op_id_for_cb = op_id.clone();

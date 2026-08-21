@@ -66,7 +66,7 @@ fn migration_candidates_skip_slot_owned_dirs() {
     let layout = WindowsLayout::new(tmp.path());
     let campaign = layout.slot_dir(SlotId::Wol);
 
-    make_map_container(&campaign.join("My Cool Campaign"));
+    make_map_container(&campaign.join("My Cool Campaign/MyMap.SC2Map"));
     make_map_container(&campaign.join("swarm")); // slot-owned: skipped
     make_map_container(&campaign.join("nova")); // slot-owned: skipped
 

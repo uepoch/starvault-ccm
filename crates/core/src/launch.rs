@@ -97,7 +97,9 @@ fn check_slot_tree(
         drift.push(format!("{}: slot directory missing", slot.as_str()));
         return;
     }
-    let actual = count_files(&slot_dir);
+    // WoL's slot is the shared Campaign root: sibling campaign dirs and
+    // crash leftovers belong to other slots, so don't count them.
+    let actual = count_files(&slot_dir, slot == crate::layout::SlotId::Wol);
     if actual != expected {
         drift.push(format!(
             "{}: {} files present, manifest expects {}",
@@ -125,7 +127,11 @@ fn check_mods_paths(
     }
 }
 
-fn count_files(dir: &Path) -> usize {
+/// Directory names under the shared Campaign root that belong to other
+/// slots — never counted as WoL content.
+const EXCLUDE_SIBLINGS: [&str; 4] = ["swarm", "void", "voidprologue", "nova"];
+
+fn count_files(dir: &Path, shared_root: bool) -> usize {
     let mut count = 0usize;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -134,6 +140,16 @@ fn count_files(dir: &Path) -> usize {
         };
         for entry in entries.flatten() {
             let p = entry.path();
+            if shared_root && p.parent() == Some(dir) {
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                // Sibling slots and crash leftovers are never WoL content.
+                if EXCLUDE_SIBLINGS.contains(&name.as_str())
+                    || name.contains(".backup-")
+                    || name.contains(".staging-")
+                {
+                    continue;
+                }
+            }
             if p.is_dir() {
                 stack.push(p);
             } else {

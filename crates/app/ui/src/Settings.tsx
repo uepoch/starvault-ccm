@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { notifications } from "@mantine/notifications";
 import {
   Alert,
   Button,
@@ -25,7 +26,6 @@ export default function Settings() {
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     invoke<ConfigDto>("get_config")
@@ -54,9 +54,16 @@ export default function Settings() {
         strategyOverride: strategy === "auto" ? null : strategy,
         crashReportsOptIn: crashReports,
       });
-      setSaved(true);
+      // Reload what the backend actually stored — never trust the optimistic
+      // form state (a rejected path must not linger in the field).
+      const cfg = await invoke<ConfigDto>("get_config");
+      setGameExe(cfg.game_exe ?? "");
+      setStrategy(cfg.strategy_override ?? "auto");
+      setCrashReports(cfg.crash_reports_opt_in);
+      notifications.show({ color: "green", message: "Settings saved." });
     } catch (e) {
       setError(String(e));
+      notifications.show({ color: "red", title: "Could not save", message: String(e) });
     }
   };
 
@@ -67,11 +74,6 @@ export default function Settings() {
       {error && (
         <Alert color="red" title="Could not save">
           {error}
-        </Alert>
-      )}
-      {saved && !error && (
-        <Alert color="green" withCloseButton onClose={() => setSaved(false)}>
-          Saved.
         </Alert>
       )}
 

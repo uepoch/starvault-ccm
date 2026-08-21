@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { notifications } from "@mantine/notifications";
 import {
   Alert,
   Button,
@@ -133,10 +134,12 @@ export default function Campaigns() {
     setPicking(null);
     try {
       await invoke("activate_campaign", { slot, id });
+      notifications.show({ color: "green", message: `${id} activated on ${slot}.` });
       refresh();
     } catch (e) {
       // Conflict errors name both packages (M5); show them as-is.
       setError(String(e));
+      notifications.show({ color: "red", title: "Activation blocked", message: String(e) });
     }
   };
 
@@ -144,17 +147,16 @@ export default function Campaigns() {
     setError(null);
     try {
       await invoke("restore_campaign", { slot });
+      notifications.show({ color: "green", message: `${slot} restored to plain.` });
       refresh();
     } catch (e) {
       setError(String(e));
+      notifications.show({ color: "red", title: "Restore failed", message: String(e) });
     }
   };
 
-  const optionsFor = (slot: string) => {
-    const matching = library.filter((e) => e.slot === slot);
-    const pool = matching.length > 0 ? matching : library;
-    return pool.map((e) => ({ value: e.id, label: e.id }));
-  };
+  const optionsFor = (slot: string) =>
+    library.filter((e) => e.slot === slot).map((e) => ({ value: e.id, label: e.id }));
 
   return (
     <Stack p="lg" gap="lg">

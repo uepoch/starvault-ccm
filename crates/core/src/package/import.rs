@@ -84,16 +84,19 @@ pub fn extract_archive(
 }
 
 /// Analyze an extracted package tree: what would be imported, and as what.
-pub fn preview_plan(plan: &PackagePlan) -> ImportPreview {
+/// `archive_name` (the zip's file name) seeds the id when the package
+/// carries no metadata at all.
+pub fn preview_plan(plan: &PackagePlan, archive_name: Option<&str>) -> ImportPreview {
     let meta = plan.metadata.as_ref();
     let title = meta.and_then(|m| m.title.clone());
-    let fallback = "imported-package";
-    let suggested_id = slug(
-        title
-            .as_deref()
-            .or(meta.and_then(|m| m.author.clone()).as_deref())
-            .unwrap_or(fallback),
-    );
+    // Title → author → archive file stem → generic.
+    let author = meta.and_then(|m| m.author.clone());
+    let id_source = title
+        .as_deref()
+        .or(author.as_deref())
+        .or(archive_name)
+        .unwrap_or("imported-package");
+    let suggested_id = slug(id_source);
     ImportPreview {
         suggested_id,
         title,

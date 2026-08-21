@@ -86,7 +86,7 @@ impl<'a> SlotManager<'a> {
                 Ok(())
             }
             Err(e) => {
-                if !slot_dir.exists() && backup.exists() {
+                if slot_dir.symlink_metadata().is_err() && backup.symlink_metadata().is_ok() {
                     let _ = std::fs::rename(&backup, &slot_dir);
                 }
                 let _ = self.reclaim_leftovers(slot);
@@ -138,16 +138,18 @@ impl<'a> SlotManager<'a> {
         self.verify_staged(manifest, &deployed)?;
 
         let slot_dir = self.layout.slot_dir(slot);
-        if slot_dir.exists() || symlink_or_junction_exists(&slot_dir) {
+        if slot_dir.symlink_metadata().is_ok() {
             std::fs::rename(&slot_dir, backup).or_else(|_| {
                 // Renaming an existing link may fail where removing works.
                 std::fs::remove_dir_all(&slot_dir)
                     .map_err(|e| pkg_err(slot_dir.display().to_string(), e.to_string()))
             })?;
         }
+        // Defensive: never hand the junction API an occupied path.
+        let _ = std::fs::remove_file(&slot_dir);
         if let Err(e) = make_junction(&slot_dir, &deployed) {
             // Restore the previous state; the caller may fall back to copy.
-            if backup.exists() && !slot_dir.exists() {
+            if backup.symlink_metadata().is_ok() && slot_dir.symlink_metadata().is_err() {
                 let _ = std::fs::rename(backup, &slot_dir);
             }
             return Err(pkg_err(
@@ -170,19 +172,21 @@ impl<'a> SlotManager<'a> {
 
         let shared_root = slot == SlotId::Wol;
         let result = (|| -> Result<()> {
-            if backup.exists() {
+            if backup.symlink_metadata().is_ok() {
                 std::fs::remove_dir_all(backup)?;
             }
             if shared_root {
                 clear_dir_contents(&slot_dir, &PROTECTED_SIBLINGS)?;
                 std::fs::rename(&staging, &slot_dir).or_else(|_| copy_tree(&staging, &slot_dir))?;
             } else {
-                if slot_dir.exists() {
+                // A leftover junction counts as occupied even when its target
+                // is gone (exists() misses that) — this was a real crash.
+                if slot_dir.symlink_metadata().is_ok() {
                     std::fs::rename(&slot_dir, backup)?;
                 }
                 if let Err(e) = std::fs::rename(&staging, &slot_dir) {
                     // restore original before surfacing
-                    if backup.exists() && !slot_dir.exists() {
+                    if backup.symlink_metadata().is_ok() && slot_dir.symlink_metadata().is_err() {
                         std::fs::rename(backup, &slot_dir)?;
                     }
                     return Err(e.into());
@@ -263,7 +267,7 @@ impl<'a> SlotManager<'a> {
                     report.push(format!("reclaimed {}", path.display()));
                 }
             } else if entry_name.starts_with(&backup_prefix) {
-                if !slot_dir.exists() {
+                if slot_dir.symlink_metadata().is_err() {
                     if std::fs::rename(&path, &slot_dir).is_ok() {
                         report.push(format!("restored {} from crash backup", slot.as_str()));
                     }
@@ -331,7 +335,8 @@ fn sibling_path(dir: &Path, kind: &str) -> PathBuf {
 }
 
 fn cleanup_if_exists(path: &Path) -> bool {
-    if path.exists() {
+    // symlink_metadata so dangling junctions/links count as existing.
+    if std::fs::symlink_metadata(path).is_ok() {
         return std::fs::remove_dir_all(path).is_ok();
     }
     false

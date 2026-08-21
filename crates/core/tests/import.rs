@@ -53,7 +53,7 @@ fn extract_archive_unwraps_and_previews() {
 
     // Wrapper folder is stripped; metadata drives title and slot guess.
     let plan = plan_from_extracted(&dest).unwrap();
-    let preview = preview_plan(&plan);
+    let preview = preview_plan(&plan, Some("pkg.zip"));
     assert_eq!(preview.title.as_deref(), Some("My Cool Campaign"));
     assert_eq!(preview.suggested_id, "my-cool-campaign");
     assert_eq!(preview.slot_guess, "lotv");

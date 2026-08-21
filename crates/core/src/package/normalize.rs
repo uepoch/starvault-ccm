@@ -346,6 +346,11 @@ fn validate_reference(
     if INSTALLED_CAMPAIGN_MODS.contains(&basename) {
         return; // resolves from the game install
     }
+    // `Campaigns\…` references resolve from the game install's Campaigns
+    // directory (SwarmStoryUtil.SC2Mod and friends ship with the game).
+    if rest.starts_with("campaigns/") || rest.starts_with("campaigns\\") {
+        return;
+    }
     let bundled = containers.keys().any(|c| {
         c.file_name()
             .is_some_and(|n| n.to_string_lossy().to_ascii_lowercase() == basename)

@@ -100,6 +100,14 @@ pub fn migration_candidates(layout: &WindowsLayout) -> Vec<MigrationCandidate> {
         if matches!(lower.as_str(), "swarm" | "void" | "voidprologue" | "nova") {
             continue; // slot-owned locations, never migrations
         }
+        // Crash-recovery leftovers are not campaigns.
+        if lower.contains(".backup-") || lower.contains(".staging-") {
+            continue;
+        }
+        // A campaign must contain at least one container somewhere.
+        if !contains_container(&entry.path()) {
+            continue;
+        }
         out.push(MigrationCandidate {
             path: entry.path().display().to_string(),
             name,
@@ -107,4 +115,27 @@ pub fn migration_candidates(layout: &WindowsLayout) -> Vec<MigrationCandidate> {
     }
     out.sort_by(|a, b| a.name.cmp(&b.name));
     out
+}
+
+/// A campaign candidate holds at least one `.SC2Map`/`.SC2Mod` container.
+fn contains_container(dir: &Path) -> bool {
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_container = p.extension().is_some_and(|e| {
+                e.eq_ignore_ascii_case("sc2map") || e.eq_ignore_ascii_case("sc2mod")
+            });
+            if is_container {
+                return true;
+            }
+            if p.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    false
 }

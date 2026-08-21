@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { MantineProvider, createTheme, Tabs } from "@mantine/core";
+import { Notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
+import "@mantine/notifications/styles.css";
 import Campaigns from "./Campaigns";
 import Library from "./Library";
 import Log from "./Log";
@@ -20,6 +22,7 @@ export default function App() {
 
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
+      <Notifications position="top-right" />
       <Tabs defaultValue="library" keepMounted={false}>
         <Tabs.List px="lg" pt="sm">
           <Tabs.Tab value="library">Library</Tabs.Tab>
