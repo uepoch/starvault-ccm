@@ -56,6 +56,15 @@ pub enum Error {
     Internal(#[from] InternalError),
 }
 
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Error::User(UserError {
+            message: e.to_string(),
+            path: None,
+        })
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Convenience constructor for package errors.
