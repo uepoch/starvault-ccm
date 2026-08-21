@@ -200,14 +200,21 @@ pub fn clear_all_data(app: AppHandle) -> Result<(), String> {
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data dir: {e}"))?;
-    let cache_dir = app
+    // Roaming holds everything we own: store, ledger, log, config.
+    if data_dir.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(&data_dir)
+            .map_err(|e| format!("clear {}: {e}", data_dir.display()))?;
+    }
+    // The cache dir also hosts the WebView2 browser profile, which is locked
+    // while the app runs — only remove our import scratch space inside it.
+    let scratch = app
         .path()
         .app_cache_dir()
-        .map_err(|e| format!("resolve cache dir: {e}"))?;
-    for dir in [data_dir, cache_dir] {
-        if dir.symlink_metadata().is_ok() {
-            std::fs::remove_dir_all(&dir).map_err(|e| format!("clear {}: {e}", dir.display()))?;
-        }
+        .map_err(|e| format!("resolve cache dir: {e}"))?
+        .join("import");
+    if scratch.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(&scratch)
+            .map_err(|e| format!("clear {}: {e}", scratch.display()))?;
     }
     Ok(())
 }
