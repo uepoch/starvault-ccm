@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{pkg_err, Result};
 use crate::layout::SlotId;
+use crate::package::import::ImportProgress;
 use crate::package::normalize::PackagePlan;
 
 /// One file in a package revision manifest.
@@ -106,12 +107,34 @@ impl Store {
     /// content), computes the content revision id, and writes the manifest.
     /// Returns the revision id.
     pub fn ingest(&self, id: &str, slot: SlotId, plan: &PackagePlan) -> Result<String> {
+        self.ingest_with_progress(id, slot, plan, |_| true)
+            .and_then(|rev| rev.ok_or_else(|| pkg_err(id, "ingest cancelled")))
+    }
+
+    /// Like [`Store::ingest`], reporting per-file progress. The callback
+    /// runs before each file; returning `false` cancels at that boundary
+    /// and yields `Ok(None)` — partial blobs are orphans reclaimed by GC.
+    pub fn ingest_with_progress(
+        &self,
+        id: &str,
+        slot: SlotId,
+        plan: &PackagePlan,
+        mut on_progress: impl FnMut(ImportProgress) -> bool,
+    ) -> Result<Option<String>> {
         if plan.files.is_empty() {
             return Err(pkg_err(id, "plan contains no files"));
         }
 
+        let total = plan.files.len() as u64;
         let mut files = Vec::with_capacity(plan.files.len());
-        for planned in &plan.files {
+        for (done, planned) in plan.files.iter().enumerate() {
+            if !on_progress(ImportProgress {
+                files_done: done as u64,
+                files_total: total,
+                current_file: planned.target.clone(),
+            }) {
+                return Ok(None);
+            }
             let sha256 = hash_file(&planned.source)?;
             let size = std::fs::metadata(&planned.source)
                 .map_err(|e| pkg_err(planned.source.display().to_string(), e.to_string()))?
@@ -157,7 +180,7 @@ impl Store {
         )
         .map_err(|e| pkg_err(id, format!("write manifest: {e}")))?;
 
-        Ok(rev)
+        Ok(Some(rev))
     }
 
     /// Load a stored manifest.

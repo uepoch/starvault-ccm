@@ -12,6 +12,7 @@ import {
   Text,
   Title,
 } from "@mantine/core";
+import ImportWizard from "./ImportWizard";
 
 interface LibraryEntry {
   id: string;
@@ -29,10 +30,14 @@ export default function Library() {
   const [error, setError] = useState<string | null>(null);
   const [legacy, setLegacy] = useState<LegacyCcmInstall | null>(null);
 
-  useEffect(() => {
+  const refresh = () => {
     invoke<LibraryEntry[]>("list_library")
       .then(setEntries)
       .catch((e) => setError(String(e)));
+  };
+
+  useEffect(refresh, []);
+  useEffect(() => {
     invoke<LegacyCcmInstall | null>("detect_legacy_ccm")
       .then(setLegacy)
       .catch(() => setLegacy(null));
@@ -40,7 +45,10 @@ export default function Library() {
 
   return (
     <Stack p="lg" gap="lg">
-      <Title order={2}>Library</Title>
+      <Group justify="space-between">
+        <Title order={2}>Library</Title>
+        <ImportWizard knownIds={new Set(entries?.map((e) => e.id) ?? [])} onImported={refresh} />
+      </Group>
 
       {legacy && (
         <Alert title="Old SC2CCM install detected" color="yellow">

@@ -114,6 +114,10 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
         .collect();
 
     for file in &all_files {
+        // Legacy metadata drives guesses only; it never ships into a slot.
+        if metadata_path == Some(file) {
+            continue;
+        }
         // Longest directory-container ancestor, if any.
         let owner = dir_containers
             .iter()
@@ -134,9 +138,6 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
             }
             None => {
                 let rel = file.strip_prefix(&wrapper).unwrap_or(file);
-                if rel.as_os_str().is_empty() {
-                    continue; // the metadata file itself
-                }
                 map_loose_path(rel)
             }
         };

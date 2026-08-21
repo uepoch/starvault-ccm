@@ -20,3 +20,5 @@ Thumbs.db
 # Tauri generated
 crates/app/gen/
 crates/app/ui/dist/
+crates/app/icons/android/
+crates/app/icons/ios/
