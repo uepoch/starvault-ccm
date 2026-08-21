@@ -432,3 +432,73 @@ pub fn reconcile(app: AppHandle) -> Result<Vec<String>, String> {
         .reconcile()
         .map_err(|e| e.to_string())
 }
+
+// --- launch (X1) -------------------------------------------------------------
+
+use svccm_core::launch::{self, PreflightReport};
+
+/// Verify-only pre-flight over the configured game install.
+#[tauri::command]
+pub fn launch_preflight(app: AppHandle) -> Result<PreflightReport, String> {
+    let cfg = load_config(&app)?;
+    let layout = layout_from_config(&cfg)?;
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    Ok(launch::preflight(&layout, &store))
+}
+
+/// Detached spawn of the game executable.
+#[tauri::command]
+pub fn launch_game(app: AppHandle) -> Result<(), String> {
+    let cfg = load_config(&app)?;
+    let layout = layout_from_config(&cfg)?;
+    launch::launch(&layout)
+        .map(|()| log_op(&app, "launch", "game started"))
+        .map_err(|e| e.to_string())
+}
+
+/// Battle.net deep link when the local exe is unusable.
+#[tauri::command]
+pub fn launch_battlenet(app: AppHandle) -> Result<(), String> {
+    launch::launch_battlenet()
+        .map(|()| log_op(&app, "launch", "battlenet:// fallback"))
+        .map_err(|e| e.to_string())
+}
+
+// --- migration (P2) ----------------------------------------------------------
+
+use svccm_core::library::MigrationCandidate;
+
+/// Custom campaign directories an old SC2CCM install left in Maps\Campaign.
+#[tauri::command]
+pub fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidate>, String> {
+    let cfg = load_config(&app)?;
+    if cfg.game_exe.is_none() {
+        return Ok(Vec::new());
+    }
+    let layout = layout_from_config(&cfg)?;
+    Ok(library::migration_candidates(&layout))
+}
+
+/// Import one legacy campaign through the normal pipeline so it is
+/// normalized, hashed, and given a manifest like any other package.
+#[tauri::command]
+pub fn migrate_candidate(
+    app: AppHandle,
+    path: String,
+    id: String,
+    slot: String,
+) -> Result<String, String> {
+    let slot = slot_from_str(&slot)?;
+    let src = PathBuf::from(&path);
+    if !src.is_dir() {
+        return Err(format!("not a directory: {path}"));
+    }
+    let plan = plan_from_extracted(&src).map_err(|e| e.to_string())?;
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let rev = store
+        .ingest_with_progress(&id, slot, &plan, |_| true)
+        .map_err(|e| e.to_string())?
+        .ok_or("migration cancelled")?;
+    log_op(&app, "migrate", &format!("{id} from {path}"));
+    Ok(rev)
+}

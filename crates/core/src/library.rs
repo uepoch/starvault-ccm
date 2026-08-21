@@ -6,10 +6,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::Result;
-use crate::store::Store;
-
 use serde::Serialize;
+
+use crate::error::Result;
+use crate::layout::WindowsLayout;
+use crate::store::Store;
 
 /// One installed package revision as the Library screen renders it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -70,4 +71,40 @@ impl LegacyCcmInstall {
                 .map(str::to_string),
         })
     }
+}
+
+/// One custom campaign directory an old SC2CCM install left behind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MigrationCandidate {
+    pub path: String,
+    /// Directory name; the default package id after slugging.
+    pub name: String,
+}
+
+/// Custom campaign dirs in `Maps\Campaign` that are not one of the four
+/// slots' own locations — i.e. what an old CCM install deployed there.
+pub fn migration_candidates(layout: &WindowsLayout) -> Vec<MigrationCandidate> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(crate::layout::GameLayout::slot_dir(
+        layout,
+        crate::layout::SlotId::Wol,
+    )) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        if matches!(lower.as_str(), "swarm" | "void" | "voidprologue" | "nova") {
+            continue; // slot-owned locations, never migrations
+        }
+        out.push(MigrationCandidate {
+            path: entry.path().display().to_string(),
+            name,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }

@@ -13,6 +13,83 @@ import {
   Title,
 } from "@mantine/core";
 
+interface PreflightReport {
+  exe_ok: boolean;
+  no_running_instance: boolean;
+  drift: string[];
+}
+
+function LaunchControls({ onError }: { onError: (msg: string) => void }) {
+  const [report, setReport] = useState<PreflightReport | null>(null);
+  const [repairing, setRepairing] = useState(false);
+
+  const runPreflight = () => {
+    invoke<PreflightReport>("launch_preflight").then(setReport).catch(onError);
+  };
+
+  const launch = async () => {
+    try {
+      await invoke("launch_game");
+    } catch (e) {
+      // Exe unusable: offer the Battle.net fallback.
+      await invoke("launch_battlenet").catch(() => {});
+      onError(String(e));
+    }
+  };
+
+  const repair = async () => {
+    setRepairing(true);
+    try {
+      await invoke("reconcile");
+      runPreflight();
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setRepairing(false);
+    }
+  };
+
+  return (
+    <Stack gap="sm">
+      <Group>
+        <Button variant="filled" onClick={runPreflight}>
+          Pre-flight check
+        </Button>
+        <Button variant="light" onClick={launch}>
+          Launch StarCraft II
+        </Button>
+      </Group>
+      {report && !(report.exe_ok && report.no_running_instance && report.drift.length === 0) && (
+        <Alert color="yellow" title="Pre-flight found problems">
+          <Stack gap="xs">
+            {!report.exe_ok && <Text size="sm">Game executable not found.</Text>}
+            {!report.no_running_instance && <Text size="sm">StarCraft II is already running.</Text>}
+            {report.drift.map((d) => (
+              <Text key={d} size="sm">
+                {d}
+              </Text>
+            ))}
+            {report.drift.length > 0 && (
+              <Button
+                size="xs"
+                variant="light"
+                loading={repairing}
+                onClick={repair}
+                w="fit-content"
+              >
+                Repair
+              </Button>
+            )}
+          </Stack>
+        </Alert>
+      )}
+      {report?.exe_ok && report.no_running_instance && report.drift.length === 0 && (
+        <Alert color="green">All clear. Ready to launch.</Alert>
+      )}
+    </Stack>
+  );
+}
+
 interface CampaignSlot {
   slot: string;
   title: string;
@@ -82,6 +159,8 @@ export default function Campaigns() {
   return (
     <Stack p="lg" gap="lg">
       <Title order={2}>Campaigns</Title>
+
+      <LaunchControls onError={setError} />
 
       {error && (
         <Alert color="red" title="Operation failed" withCloseButton onClose={() => setError(null)}>

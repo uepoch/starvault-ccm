@@ -24,6 +24,11 @@ pub fn run() {
             commands::restore_campaign,
             commands::read_log,
             commands::reconcile,
+            commands::launch_preflight,
+            commands::launch_game,
+            commands::launch_battlenet,
+            commands::list_migration_candidates,
+            commands::migrate_candidate,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

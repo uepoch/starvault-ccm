@@ -13,6 +13,7 @@ import {
   Title,
 } from "@mantine/core";
 import ImportWizard from "./ImportWizard";
+import MigrationBanner from "./MigrationBanner";
 
 interface LibraryEntry {
   id: string;
@@ -53,10 +54,11 @@ export default function Library() {
       {legacy && (
         <Alert title="Old SC2CCM install detected" color="yellow">
           A legacy config was found
-          {legacy.exe_hint ? ` (game: ${legacy.exe_hint})` : ""}. Migration arrives in a later
-          release.
+          {legacy.exe_hint ? ` (game: ${legacy.exe_hint})` : ""}. Import your campaigns below.
         </Alert>
       )}
+
+      <MigrationBanner onMigrated={refresh} />
 
       {error && (
         <Alert color="red" title="Error">
