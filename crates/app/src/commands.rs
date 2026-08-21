@@ -565,3 +565,12 @@ pub fn migrate_candidate(
 pub fn discover_game_exe() -> Option<String> {
     svccm_core::layout::discover_install().map(|p| p.display().to_string())
 }
+
+/// Remove an installed package (refuses while active on a faction).
+#[tauri::command]
+pub fn remove_package(app: AppHandle, id: String) -> Result<(), String> {
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    store.remove_package(&id).map_err(|e| e.to_string())?;
+    log_op(&app, "remove", &id);
+    Ok(())
+}

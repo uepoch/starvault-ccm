@@ -3,15 +3,18 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   Alert,
   Badge,
+  Button,
   Card,
   Center,
   Group,
   Loader,
+  Modal,
   SimpleGrid,
   Stack,
   Text,
   Title,
 } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import ImportWizard from "./ImportWizard";
 import MigrationBanner from "./MigrationBanner";
 
@@ -30,6 +33,8 @@ export default function Library() {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [legacy, setLegacy] = useState<LegacyCcmInstall | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const refresh = () => {
     invoke<LibraryEntry[]>("list_library")
@@ -38,6 +43,21 @@ export default function Library() {
   };
 
   useEffect(refresh, []);
+
+  const remove = async (id: string) => {
+    setBusyId(id);
+    setRemoving(null);
+    try {
+      await invoke("remove_package", { id });
+      notifications.show({ color: "green", message: `${id} removed.` });
+      refresh();
+    } catch (e) {
+      // Active packages refuse removal; the error says which faction.
+      notifications.show({ color: "red", title: "Remove failed", message: String(e) });
+    } finally {
+      setBusyId(null);
+    }
+  };
   useEffect(() => {
     invoke<LegacyCcmInstall | null>("detect_legacy_ccm")
       .then(setLegacy)
@@ -89,13 +109,50 @@ export default function Library() {
                   <Badge color="gray">inactive</Badge>
                 )}
               </Group>
-              <Text size="xs" c="dimmed" ff="monospace">
-                {entry.rev.slice(0, 12)}
-              </Text>
+              <Group justify="space-between">
+                <Text size="xs" c="dimmed" ff="monospace">
+                  {entry.rev.slice(0, 12)}
+                </Text>
+                <Button
+                  size="compact-xs"
+                  variant="subtle"
+                  color="red"
+                  disabled={busyId !== null}
+                  onClick={() => setRemoving(entry.id)}
+                >
+                  Remove
+                </Button>
+              </Group>
             </Stack>
           </Card>
         ))}
       </SimpleGrid>
+
+      <Modal
+        opened={removing !== null}
+        onClose={() => setRemoving(null)}
+        title="Remove package?"
+        size="sm"
+      >
+        <Stack gap="sm">
+          <Text size="sm">
+            Delete `{removing}` and its files from the store. Packages that are active on a faction
+            must be restored first.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setRemoving(null)}>
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              loading={busyId !== null}
+              onClick={() => removing && remove(removing)}
+            >
+              Remove
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

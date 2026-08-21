@@ -150,8 +150,8 @@ export default function Settings() {
         <Stack gap="sm">
           <Text fw={500}>Danger zone</Text>
           <Text size="sm" c="dimmed">
-            Removes every imported package, the ledger, the log, and your
-            settings. Your game install is not touched. This cannot be undone.
+            Removes every imported package, the ledger, the log, and your settings. Your game
+            install is not touched. This cannot be undone.
           </Text>
           <Button color="red" variant="light" w="fit-content" onClick={() => setConfirmClear(true)}>
             Clear all data…
@@ -167,9 +167,8 @@ export default function Settings() {
       >
         <Stack gap="sm">
           <Text size="sm">
-            Every imported package, the log, and your settings will be deleted.
-            Slots currently active in the game directory stay as they are until
-            you restore them.
+            Every imported package, the log, and your settings will be deleted. Slots currently
+            active in the game directory stay as they are until you restore them.
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setConfirmClear(false)}>

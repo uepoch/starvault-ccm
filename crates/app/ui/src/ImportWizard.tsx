@@ -229,7 +229,7 @@ export default function ImportWizard({
                 </Text>
                 {preview.slot_guess !== "unknown" ? (
                   <Badge size="lg" variant="light">
-                    Loads via Campaign → {SLOTS.find((s) => s.value === preview.slot_guess)?.label}
+                    {SLOTS.find((s) => s.value === preview.slot_guess)?.label}
                   </Badge>
                 ) : (
                   <>

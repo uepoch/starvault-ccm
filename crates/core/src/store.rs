@@ -381,3 +381,73 @@ pub(crate) fn hash_file(path: &Path) -> Result<String> {
     }
     Ok(hex::encode(hasher.finalize()))
 }
+
+impl Store {
+    /// Remove an installed package entirely: manifests, deploy trees, and
+    /// any blobs no other package references. Refuses while the package is
+    /// active on a slot — restore first.
+    pub fn remove_package(&self, id: &str) -> Result<()> {
+        let active = self.active_slots()?;
+        if let Some((slot, _, _)) = active.iter().find(|(_, pkg, _)| pkg == id) {
+            return Err(crate::error::Error::User(crate::UserError {
+                message: format!(
+                    "`{id}` is active on {slot} — restore that faction to plain before removing it"
+                ),
+                path: None,
+            }));
+        }
+
+        // Collect this package's revisions (manifests + deploy trees).
+        let pkg_dir = self.root.join("packages").join(id);
+        let mut removed_revs = Vec::new();
+        for rev in sorted_dirs(&pkg_dir)? {
+            self.load_manifest(id, &rev)?;
+            removed_revs.push(rev);
+        }
+        if removed_revs.is_empty() {
+            return Err(pkg_err(id, "package is not installed"));
+        }
+
+        std::fs::remove_dir_all(&pkg_dir)
+            .map_err(|e| pkg_err(pkg_dir.display().to_string(), e.to_string()))?;
+        for rev in &removed_revs {
+            // Deploy trees are named `<slot>-<rev>`; a rev could serve
+            // several slots, so match on the rev suffix.
+            let deploy_dir = self.root.join("deploy");
+            if let Ok(entries) = std::fs::read_dir(&deploy_dir) {
+                for entry in entries.flatten() {
+                    if entry
+                        .file_name()
+                        .to_string_lossy()
+                        .ends_with(&format!("-{rev}"))
+                    {
+                        let _ = std::fs::remove_dir_all(entry.path());
+                    }
+                }
+            }
+        }
+
+        // Sweep GC: keep only blobs referenced by surviving manifests.
+        let mut referenced = std::collections::BTreeSet::new();
+        for (other_id, rev, _) in self.list_packages()? {
+            let manifest = self.load_manifest(&other_id, &rev)?;
+            for file in manifest.files {
+                referenced.insert(file.sha256);
+            }
+        }
+        let blobs_dir = self.root.join("blobs");
+        for shard in sorted_dirs(&blobs_dir)? {
+            let shard_dir = blobs_dir.join(&shard);
+            for entry in std::fs::read_dir(&shard_dir)?.flatten() {
+                let sha = entry.file_name().to_string_lossy().into_owned();
+                if !referenced.contains(&sha) {
+                    std::fs::remove_file(entry.path())?;
+                }
+            }
+            if std::fs::read_dir(&shard_dir)?.next().is_none() {
+                std::fs::remove_dir(&shard_dir)?;
+            }
+        }
+        Ok(())
+    }
+}
