@@ -9,6 +9,11 @@ authors.workspace = true
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# Production builds embed ui/dist instead of pointing at the dev server.
+# Plain `cargo build` stays in dev mode; pass --features custom-protocol.
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
