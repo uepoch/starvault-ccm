@@ -5,6 +5,7 @@ import { notifications } from "@mantine/notifications";
 import {
   Alert,
   Button,
+  Collapse,
   Group,
   Modal,
   Progress,
@@ -59,6 +60,9 @@ export default function ImportWizard({
   const [title, setTitle] = useState("");
   const [slot, setSlot] = useState("");
   const [result, setResult] = useState<string | null>(null);
+  const [warningsOpen, setWarningsOpen] = useState(false);
+  const [importedId, setImportedId] = useState<string | null>(null);
+  const [activateSlot, setActivateSlot] = useState("");
   const opRef = useRef<string | null>(null);
   opRef.current = opId;
 
@@ -121,6 +125,7 @@ export default function ImportWizard({
       });
       if (rev === null) {
         notifications.show({ color: "yellow", message: "Import cancelled." });
+        setResult("cancelled");
       } else {
         notifications.show({
           color: "green",
@@ -128,8 +133,9 @@ export default function ImportWizard({
           message: `${id}@${rev.slice(0, 12)}`,
         });
         onImported();
+        setImportedId(id);
+        setResult(`imported as ${id}`);
       }
-      setResult(rev === null ? "cancelled" : `imported as ${id}`);
       setStep(4);
     } catch (e) {
       setError(String(e));
@@ -148,14 +154,7 @@ export default function ImportWizard({
         Import package…
       </Button>
 
-      <Modal
-        opened={opened}
-        onClose={reset}
-        title="Import package"
-        size="lg"
-        // Fixed height so the panel never jitters as content changes.
-        styles={{ content: { height: 480 }, body: { height: "100%", overflowY: "auto" } }}
-      >
+      <Modal opened={opened} onClose={reset} title="Import package" fullScreen>
         <Stack gap="md" h="100%">
           <Stepper active={step} size="sm">
             <Stepper.Step label="Select" />
@@ -190,11 +189,27 @@ export default function ImportWizard({
                   A package named `{id}` is already installed. Confirming replaces it entirely.
                 </Alert>
               )}
-              {preview.warnings.map((w) => (
-                <Alert key={w} color="orange" title="Warning">
-                  {w}
+              {preview.warnings.length > 0 && (
+                <Alert color="yellow" title={`Warnings (${preview.warnings.length})`}>
+                  <Collapse expanded={warningsOpen}>
+                    <Stack gap="xs">
+                      {preview.warnings.map((w) => (
+                        <Text key={w} size="sm">
+                          {w}
+                        </Text>
+                      ))}
+                    </Stack>
+                  </Collapse>
+                  <Button
+                    variant="subtle"
+                    size="compact-xs"
+                    mt="xs"
+                    onClick={() => setWarningsOpen(!warningsOpen)}
+                  >
+                    {warningsOpen ? "Hide" : "Show all"}
+                  </Button>
                 </Alert>
-              ))}
+              )}
               <TextInput
                 label="Package id"
                 value={id}
@@ -237,9 +252,47 @@ export default function ImportWizard({
           )}
 
           {step === 4 && (
-            <Stack gap="sm" justify="center" flex={1}>
+            <Stack gap="sm" justify="center" flex={1} maw={480} mx="auto" w="100%">
               <Alert color={result === "cancelled" ? "yellow" : "green"}>{result}</Alert>
-              <Button onClick={reset}>Done</Button>
+              {importedId && (
+                <>
+                  <Text size="sm" fw={500}>
+                    Activate now? Pick a slot:
+                  </Text>
+                  <Group>
+                    <SegmentedControl
+                      data={SLOTS}
+                      value={activateSlot}
+                      onChange={setActivateSlot}
+                    />
+                    <Button
+                      disabled={!activateSlot}
+                      onClick={async () => {
+                        try {
+                          await invoke("activate_campaign", { slot: activateSlot, id: importedId });
+                          notifications.show({
+                            color: "green",
+                            message: `${importedId} activated on ${activateSlot}.`,
+                          });
+                          onImported();
+                          reset();
+                        } catch (e) {
+                          notifications.show({
+                            color: "red",
+                            title: "Activation blocked",
+                            message: String(e),
+                          });
+                        }
+                      }}
+                    >
+                      Activate
+                    </Button>
+                  </Group>
+                </>
+              )}
+              <Button variant="default" onClick={reset}>
+                {importedId ? "Later" : "Done"}
+              </Button>
             </Stack>
           )}
         </Stack>

@@ -192,6 +192,26 @@ pub fn import_cancel(state: tauri::State<ImportState>, op_id: String) {
     }
 }
 
+/// Wipe all app data: store, ledger, log, config. Confirmation happens in
+/// the UI; this is unrecoverable.
+#[tauri::command]
+pub fn clear_all_data(app: AppHandle) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data dir: {e}"))?;
+    let cache_dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("resolve cache dir: {e}"))?;
+    for dir in [data_dir, cache_dir] {
+        if dir.symlink_metadata().is_ok() {
+            std::fs::remove_dir_all(&dir).map_err(|e| format!("clear {}: {e}", dir.display()))?;
+        }
+    }
+    Ok(())
+}
+
 // --- campaigns screen --------------------------------------------------------
 
 use svccm_core::config::{Config, StrategyChoice};
@@ -252,6 +272,11 @@ pub fn save_config(
     let mut cfg = load_config(&app)?;
     cfg.game_exe = game_exe.map(PathBuf::from);
     if let Some(ref exe) = cfg.game_exe {
+        // The exact file the user typed must exist — a typo in the file name
+        // must not pass just because its parent folder looks like an install.
+        if !exe.is_file() {
+            return Err(format!("no executable found at {}", exe.display()));
+        }
         let root = exe.parent().ok_or("game path has no parent directory")?;
         WindowsLayout::new(root)
             .validate()

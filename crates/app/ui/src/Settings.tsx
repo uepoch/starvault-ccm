@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   Group,
+  Modal,
   Select,
   Stack,
   Switch,
@@ -26,6 +27,7 @@ export default function Settings() {
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
     invoke<ConfigDto>("get_config")
@@ -114,6 +116,56 @@ export default function Settings() {
           </Button>
         </Stack>
       </Card>
+
+      <Card withBorder color="red">
+        <Stack gap="sm">
+          <Text fw={500}>Danger zone</Text>
+          <Text size="sm" c="dimmed">
+            Removes every imported package, the ledger, the log, and your settings. Your game
+            install is not touched. This cannot be undone.
+          </Text>
+          <Button color="red" variant="light" w="fit-content" onClick={() => setConfirmClear(true)}>
+            Clear all data…
+          </Button>
+        </Stack>
+      </Card>
+
+      <Modal
+        opened={confirmClear}
+        onClose={() => setConfirmClear(false)}
+        title="Clear all data?"
+        size="sm"
+      >
+        <Stack gap="sm">
+          <Text size="sm">
+            Every imported package, the log, and your settings will be deleted. Slots currently
+            active in the game directory stay as they are until you restore them.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setConfirmClear(false)}>
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              onClick={async () => {
+                setConfirmClear(false);
+                try {
+                  await invoke("clear_all_data");
+                  const cfg = await invoke<ConfigDto>("get_config");
+                  setGameExe(cfg.game_exe ?? "");
+                  setStrategy(cfg.strategy_override ?? "auto");
+                  setCrashReports(cfg.crash_reports_opt_in);
+                  notifications.show({ color: "green", message: "All data cleared." });
+                } catch (e) {
+                  notifications.show({ color: "red", title: "Clear failed", message: String(e) });
+                }
+              }}
+            >
+              Delete everything
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }
