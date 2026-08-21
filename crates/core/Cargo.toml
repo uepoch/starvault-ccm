@@ -8,6 +8,7 @@ authors.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+wow-mpq = "0.7.0"
 
 [dev-dependencies]
 tempfile = "3"

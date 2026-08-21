@@ -1,0 +1,5 @@
+title=Arcade Missions
+desc=Test vector from example.zip
+author=StarVault
+version=1.0.0
+campaign=Legacy of the Void

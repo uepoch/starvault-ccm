@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DocInfo>
+    <Dependencies>
+        <Value>bnet:Liberty (Campaign)/0.0/999,file:Campaigns/Liberty.SC2Campaign</Value>
+        <Value>file:Mods\RaynorRogueRaw.SC2Mod</Value>
+        <Value>file:Mods\kit_liberty_story.SC2Mod</Value>
+        <Value>file:Mods\SCORE\SCORE-Other.SC2Mod</Value>
+        <Value>file:Mods\RandomBuff.SC2Mod</Value>
+    </Dependencies>
+</DocInfo>
