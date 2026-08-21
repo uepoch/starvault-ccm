@@ -183,3 +183,235 @@ pub fn import_cancel(state: tauri::State<ImportState>, op_id: String) {
         op.cancel.store(true, Ordering::Relaxed);
     }
 }
+
+// --- campaigns screen --------------------------------------------------------
+
+use svccm_core::config::{Config, StrategyChoice};
+use svccm_core::layout::WindowsLayout;
+use svccm_core::slots::SlotManager;
+
+fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data dir: {e}"))?
+        .join("config.toml"))
+}
+
+fn load_config(app: &AppHandle) -> Result<Config, String> {
+    Config::load(config_path(app)?).map_err(|e| e.to_string())
+}
+
+/// Game layout root derived from the configured exe (`…/StarCraft II.exe`).
+fn layout_from_config(cfg: &Config) -> Result<WindowsLayout, String> {
+    let exe = cfg.game_exe.as_ref().ok_or("game path not configured")?;
+    let root = exe
+        .parent()
+        .ok_or("configured game path has no parent directory")?;
+    let layout = WindowsLayout::new(root);
+    layout.validate().map_err(|e| e.to_string())?;
+    Ok(layout)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigDto {
+    pub game_exe: Option<String>,
+    pub strategy_override: Option<String>,
+    pub crash_reports_opt_in: bool,
+}
+
+#[tauri::command]
+pub fn get_config(app: AppHandle) -> Result<ConfigDto, String> {
+    let cfg = load_config(&app)?;
+    Ok(ConfigDto {
+        game_exe: cfg.game_exe.map(|p| p.display().to_string()),
+        strategy_override: cfg.strategy_override.map(|s| match s {
+            StrategyChoice::Junction => "junction".into(),
+            StrategyChoice::Copy => "copy".into(),
+        }),
+        crash_reports_opt_in: cfg.crash_reports_opt_in,
+    })
+}
+
+/// Persist settings; the game exe must exist when provided.
+#[tauri::command]
+pub fn save_config(
+    app: AppHandle,
+    game_exe: Option<String>,
+    strategy_override: Option<String>,
+    crash_reports_opt_in: bool,
+) -> Result<(), String> {
+    let mut cfg = load_config(&app)?;
+    cfg.game_exe = game_exe.map(PathBuf::from);
+    if let Some(ref exe) = cfg.game_exe {
+        let root = exe.parent().ok_or("game path has no parent directory")?;
+        WindowsLayout::new(root)
+            .validate()
+            .map_err(|e| e.to_string())?;
+    }
+    cfg.strategy_override = match strategy_override.as_deref() {
+        Some("junction") => Some(StrategyChoice::Junction),
+        Some("copy") => Some(StrategyChoice::Copy),
+        _ => None,
+    };
+    cfg.crash_reports_opt_in = crash_reports_opt_in;
+    cfg.save(config_path(&app)?).map_err(|e| e.to_string())
+}
+
+/// One slot card on the Campaigns screen.
+#[derive(Debug, Clone, Serialize)]
+pub struct CampaignSlot {
+    pub slot: String,
+    pub title: String,
+    pub pkg_id: Option<String>,
+    pub rev: Option<String>,
+    pub author: Option<String>,
+    pub version: Option<String>,
+}
+
+/// The four slots as the UI renders them: plain campaign or package.
+#[tauri::command]
+pub fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let active: HashMap<String, (String, String)> = store
+        .active_slots()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(slot, id, rev)| (slot, (id, rev)))
+        .collect();
+    Ok(SlotId::ALL
+        .into_iter()
+        .map(|slot| {
+            let (title, pkg_id, rev, author, version) = match active.get(slot.as_str()) {
+                Some((id, r)) => match store.load_manifest(id, r) {
+                    Ok(m) => (
+                        m.title.clone().unwrap_or_else(|| id.clone()),
+                        Some(id.clone()),
+                        Some(r.clone()),
+                        m.author,
+                        m.version,
+                    ),
+                    Err(_) => (id.clone(), Some(id.clone()), Some(r.clone()), None, None),
+                },
+                None => ("Plain campaign".to_string(), None, None, None, None),
+            };
+            CampaignSlot {
+                slot: slot.as_str().to_string(),
+                title,
+                pkg_id,
+                rev,
+                author,
+                version,
+            }
+        })
+        .collect())
+}
+
+/// Activate an installed package on a slot (K3: replaces whatever is there).
+/// Cross-slot conflicts abort untouched; the error names both packages.
+#[tauri::command]
+pub fn activate_campaign(app: AppHandle, slot: String, id: String) -> Result<(), String> {
+    let slot = slot_from_str(&slot)?;
+    let cfg = load_config(&app)?;
+    let layout = layout_from_config(&cfg)?;
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+
+    // Latest installed revision of `id` (rows are sorted by revision string).
+    let revs: Vec<String> = store
+        .list_packages()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|(pid, _, _)| pid == &id)
+        .map(|(_, rev, _)| rev)
+        .collect();
+    let rev = revs
+        .last()
+        .ok_or(format!("package `{id}` is not installed"))?;
+
+    let manager = SlotManager::new(&layout, &store);
+    manager
+        .activate(slot, &id, rev)
+        .map_err(|e| e.to_string())?;
+    log_op(&app, "activate", &format!("{id} → {}", slot.as_str()));
+    Ok(())
+}
+
+/// Return a slot to its plain Blizzard state.
+#[tauri::command]
+pub fn restore_campaign(app: AppHandle, slot: String) -> Result<(), String> {
+    let slot = slot_from_str(&slot)?;
+    let cfg = load_config(&app)?;
+    let layout = layout_from_config(&cfg)?;
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    SlotManager::new(&layout, &store)
+        .restore(slot)
+        .map_err(|e| e.to_string())?;
+    log_op(&app, "restore", slot.as_str());
+    Ok(())
+}
+
+// --- operation log -----------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct LogEntry {
+    /// RFC 3339 timestamp.
+    pub time: String,
+    pub kind: String,
+    pub detail: String,
+}
+
+fn log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve app data dir: {e}"))?
+        .join("log.jsonl"))
+}
+
+fn log_op(app: &AppHandle, kind: &str, detail: &str) {
+    let entry = LogEntry {
+        // ponytail: second-resolution UTC stamp from std only; chrono when the
+        // log needs sub-second ordering or local timezone display.
+        time: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or_default()
+            .to_string(),
+        kind: kind.to_string(),
+        detail: detail.to_string(),
+    };
+    if let Ok(path) = log_path(app) {
+        if let Ok(mut json) = serde_json::to_string(&entry) {
+            json.push('\n');
+            use std::io::Write;
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let _ = f.write_all(json.as_bytes());
+            }
+        }
+    }
+}
+
+/// Recent operations, newest first (the support artifact).
+#[tauri::command]
+pub fn read_log(app: AppHandle, limit: usize) -> Result<Vec<LogEntry>, String> {
+    let path = log_path(&app)?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let mut out: Vec<LogEntry> = text
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect();
+    out.reverse();
+    out.truncate(limit);
+    Ok(out)
+}

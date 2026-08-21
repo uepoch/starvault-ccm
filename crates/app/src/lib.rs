@@ -17,6 +17,12 @@ pub fn run() {
             commands::import_analyze,
             commands::import_ingest,
             commands::import_cancel,
+            commands::get_config,
+            commands::save_config,
+            commands::list_campaigns,
+            commands::activate_campaign,
+            commands::restore_campaign,
+            commands::read_log,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

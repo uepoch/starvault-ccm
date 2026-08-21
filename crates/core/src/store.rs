@@ -38,6 +38,14 @@ pub struct PackageManifest {
     pub id: String,
     pub rev: String,
     pub slot: String,
+    /// Detected metadata, when the package carried any (K2). Absent from
+    /// the canonical hash so revisions stay content-addressed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     pub files: Vec<ManifestFile>,
 }
 
@@ -162,6 +170,9 @@ impl Store {
             id: id.to_string(),
             rev: String::new(),
             slot: slot.as_str().to_string(),
+            title: plan.metadata.as_ref().and_then(|m| m.title.clone()),
+            author: plan.metadata.as_ref().and_then(|m| m.author.clone()),
+            version: plan.metadata.as_ref().and_then(|m| m.version.clone()),
             files,
         };
         let canonical =
