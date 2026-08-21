@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { notifications } from "@mantine/notifications";
 import {
   Alert,
+  Badge,
   Button,
   Collapse,
   Group,
@@ -62,7 +63,7 @@ export default function ImportWizard({
   const [result, setResult] = useState<string | null>(null);
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [importedId, setImportedId] = useState<string | null>(null);
-  const [activateSlot, setActivateSlot] = useState("");
+  const [activating, setActivating] = useState(false);
   const opRef = useRef<string | null>(null);
   opRef.current = opId;
 
@@ -224,11 +225,22 @@ export default function ImportWizard({
               <div>
                 <Text size="sm" fw={500} mb={4}>
                   Slot
-                  {preview.matched_pattern
-                    ? ` (matched "${preview.matched_pattern}")`
-                    : " — no guess, choose one"}
+                  {preview.matched_pattern ? ` (matched "${preview.matched_pattern}")` : ""}
                 </Text>
-                <SegmentedControl data={SLOTS} value={slot} onChange={setSlot} />
+                {preview.slot_guess !== "unknown" ? (
+                  <Badge size="lg" variant="light">
+                    {SLOTS.find((s) => s.value === preview.slot_guess)?.label} — this campaign only
+                    loads through its own launcher
+                  </Badge>
+                ) : (
+                  <>
+                    <Text size="xs" c="dimmed" mb={4}>
+                      No detection possible — pick the campaign this package was built for. It can
+                      only ever load through that launcher.
+                    </Text>
+                    <SegmentedControl data={SLOTS} value={slot} onChange={setSlot} />
+                  </>
+                )}
               </div>
               <Group>
                 <Button disabled={!id || !slot} onClick={startIngest}>
@@ -254,25 +266,21 @@ export default function ImportWizard({
           {step === 4 && (
             <Stack gap="sm" justify="center" flex={1} maw={480} mx="auto" w="100%">
               <Alert color={result === "cancelled" ? "yellow" : "green"}>{result}</Alert>
-              {importedId && (
+              {importedId && slot && (
                 <>
                   <Text size="sm" fw={500}>
-                    Activate now? Pick a slot:
+                    Activate on {SLOTS.find((s) => s.value === slot)?.label} now?
                   </Text>
                   <Group>
-                    <SegmentedControl
-                      data={SLOTS}
-                      value={activateSlot}
-                      onChange={setActivateSlot}
-                    />
                     <Button
-                      disabled={!activateSlot}
+                      loading={activating}
                       onClick={async () => {
+                        setActivating(true);
                         try {
-                          await invoke("activate_campaign", { slot: activateSlot, id: importedId });
+                          await invoke("activate_campaign", { slot, id: importedId });
                           notifications.show({
                             color: "green",
-                            message: `${importedId} activated on ${activateSlot}.`,
+                            message: `${importedId} activated on ${slot}.`,
                           });
                           onImported();
                           reset();
@@ -282,6 +290,8 @@ export default function ImportWizard({
                             title: "Activation blocked",
                             message: String(e),
                           });
+                        } finally {
+                          setActivating(false);
                         }
                       }}
                     >

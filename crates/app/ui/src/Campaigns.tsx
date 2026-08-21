@@ -117,6 +117,7 @@ export default function Campaigns() {
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   const refresh = () => {
     invoke<CampaignSlot[]>("list_campaigns")
@@ -132,6 +133,7 @@ export default function Campaigns() {
   const activate = async (slot: string, id: string) => {
     setError(null);
     setPicking(null);
+    setBusy(`activate-${slot}`);
     try {
       await invoke("activate_campaign", { slot, id });
       notifications.show({ color: "green", message: `${id} activated on ${slot}.` });
@@ -140,11 +142,14 @@ export default function Campaigns() {
       // Conflict errors name both packages (M5); show them as-is.
       setError(String(e));
       notifications.show({ color: "red", title: "Activation blocked", message: String(e) });
+    } finally {
+      setBusy(null);
     }
   };
 
   const restore = async (slot: string) => {
     setError(null);
+    setBusy(`restore-${slot}`);
     try {
       await invoke("restore_campaign", { slot });
       notifications.show({ color: "green", message: `${slot} restored to plain.` });
@@ -152,6 +157,8 @@ export default function Campaigns() {
     } catch (e) {
       setError(String(e));
       notifications.show({ color: "red", title: "Restore failed", message: String(e) });
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -183,13 +190,19 @@ export default function Campaigns() {
                 </Text>
               )}
               <Group justify="space-between" mt="xs">
-                <Button size="xs" variant="light" onClick={() => setPicking(entry.slot)}>
+                <Button
+                  size="xs"
+                  variant="light"
+                  disabled={busy !== null}
+                  onClick={() => setPicking(entry.slot)}
+                >
                   {entry.pkg_id ? "Replace…" : "Activate…"}
                 </Button>
                 <Button
                   size="xs"
                   variant="default"
-                  disabled={!entry.pkg_id}
+                  disabled={!entry.pkg_id || busy !== null}
+                  loading={busy === `restore-${entry.slot}`}
                   onClick={() => restore(entry.slot)}
                 >
                   Restore to plain
@@ -215,6 +228,8 @@ export default function Campaigns() {
                 <Button
                   variant="light"
                   fullWidth
+                  loading={busy === `activate-${picking}`}
+                  disabled={busy !== null}
                   onClick={() => picking && activate(picking, opt.value)}
                 >
                   {opt.label}

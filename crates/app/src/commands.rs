@@ -366,11 +366,26 @@ pub fn activate_campaign(app: AppHandle, slot: String, id: String) -> Result<(),
         .collect();
     let rev = revs
         .last()
-        .ok_or(format!("package `{id}` is not installed"))?;
+        .ok_or(format!("package `{id}` is not installed"))?
+        .clone();
+
+    // A campaign only loads through its own launcher, so the package's slot
+    // is a fact, not a preference: enforce the binding at the boundary.
+    let manifest_slot = store
+        .load_manifest(&id, &rev)
+        .map_err(|e| e.to_string())?
+        .slot;
+    if manifest_slot != slot.as_str() {
+        return Err(format!(
+            "`{id}` is built for the {} campaign and cannot go on {}",
+            manifest_slot,
+            slot.as_str()
+        ));
+    }
 
     let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
     manager
-        .activate(slot, &id, rev)
+        .activate(slot, &id, &rev)
         .map_err(|e| e.to_string())?;
     log_op(&app, "activate", &format!("{id} → {}", slot.as_str()));
     Ok(())
