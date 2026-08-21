@@ -6,14 +6,20 @@
 
 mod commands;
 
+use tauri::Manager;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(commands::ImportState::default())
         .manage(commands::LibraryCache::default())
         .setup(|app| {
             commands::init_log_level(app.handle());
+            let dir = app.path().app_data_dir()?.join("store");
+            app.manage(commands::AppState {
+                store: std::sync::Arc::new(svccm_core::store::Store::open(dir)?),
+                import_ops: Default::default(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

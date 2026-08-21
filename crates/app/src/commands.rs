@@ -16,25 +16,16 @@ use svccm_core::package::normalize::plan_from_extracted;
 use svccm_core::store::Store;
 use tauri::{AppHandle, Emitter, Manager};
 
-/// Store root under the OS app-data dir (`%APPDATA%\StarVault\CCM\store`).
-fn store_root(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("resolve app data dir: {e}"))?;
-    Ok(dir.join("store"))
-}
-
 #[tauri::command]
 pub async fn list_library(
-    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
 ) -> Result<Vec<LibraryEntry>, String> {
     let mut cached = cache.entries.lock().expect("library cache poisoned");
     if let Some(entries) = cached.as_ref() {
         return Ok(entries.clone());
     }
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     let entries = library::scan(&store).map_err(|e| e.to_string())?;
     *cached = Some(entries.clone());
     Ok(entries)
@@ -60,14 +51,17 @@ pub fn detect_legacy_ccm(app: AppHandle) -> Result<Option<LegacyCcmInstall>, Str
 // --- import wizard (K2) -----------------------------------------------------
 
 /// One in-flight import: extracted tree plus its cancel flag.
-struct ImportOp {
-    extracted_dir: PathBuf,
-    cancel: Arc<AtomicBool>,
+pub struct ImportOp {
+    pub extracted_dir: PathBuf,
+    pub cancel: Arc<AtomicBool>,
 }
 
-#[derive(Default)]
-pub struct ImportState {
-    ops: Mutex<HashMap<String, ImportOp>>,
+/// One SQLite connection for the process lifetime. Reopening the ledger
+/// per command made Defender rescan the whole database file every time.
+pub struct AppState {
+    pub store: Arc<Store>,
+    /// In-flight imports: extracted tree + cancel flag per operation.
+    pub import_ops: Mutex<HashMap<String, ImportOp>>,
 }
 
 /// Library scan cache; any mutation clears it so tab switches read
@@ -143,7 +137,7 @@ fn slot_from_str(slot: &str) -> Result<SlotId, String> {
 #[tauri::command]
 pub fn import_analyze(
     app: AppHandle,
-    state: tauri::State<ImportState>,
+    store_state: tauri::State<'_, AppState>,
     op_id: String,
     path: String,
 ) -> Result<svccm_core::package::import::ImportPreview, String> {
@@ -184,13 +178,17 @@ pub fn import_analyze(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());
     let preview = preview_plan(&plan, archive_name.as_deref());
-    state.ops.lock().expect("import ops poisoned").insert(
-        op_id,
-        ImportOp {
-            extracted_dir,
-            cancel: Arc::new(AtomicBool::new(false)),
-        },
-    );
+    store_state
+        .import_ops
+        .lock()
+        .expect("import ops poisoned")
+        .insert(
+            op_id,
+            ImportOp {
+                extracted_dir,
+                cancel: Arc::new(AtomicBool::new(false)),
+            },
+        );
     Ok(preview)
 }
 
@@ -200,7 +198,7 @@ pub fn import_analyze(
 #[tauri::command]
 pub fn import_ingest(
     app: AppHandle,
-    state: tauri::State<ImportState>,
+    store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
     op_id: String,
     id: String,
@@ -209,7 +207,7 @@ pub fn import_ingest(
 ) -> Result<Option<String>, String> {
     let slot = slot_from_str(&slot)?;
     let (extracted_dir, cancel) = {
-        let mut ops = state.ops.lock().expect("import ops poisoned");
+        let mut ops = store_state.import_ops.lock().expect("import ops poisoned");
         let op = ops
             .remove(&op_id)
             .ok_or_else(|| format!("no such import operation: {op_id}"))?;
@@ -233,7 +231,7 @@ pub fn import_ingest(
         } else if title.is_some() || desc.is_some() {
             plan.metadata = Some(fallback_metadata(title, desc));
         }
-        let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+        let store = store_state.store.clone();
         let app_for_cb = app.clone();
         let op_id_for_cb = op_id.clone();
         store
@@ -270,8 +268,13 @@ pub fn import_ingest(
 
 /// Cancel an in-flight import at the next file boundary.
 #[tauri::command]
-pub fn import_cancel(state: tauri::State<ImportState>, op_id: String) {
-    if let Some(op) = state.ops.lock().expect("import ops poisoned").get(&op_id) {
+pub fn import_cancel(store_state: tauri::State<'_, AppState>, op_id: String) {
+    if let Some(op) = store_state
+        .import_ops
+        .lock()
+        .expect("import ops poisoned")
+        .get(&op_id)
+    {
         op.cancel.store(true, Ordering::Relaxed);
     }
 }
@@ -404,9 +407,12 @@ pub struct CampaignSlot {
 
 /// The four slots as the UI renders them: plain campaign or package.
 #[tauri::command]
-pub async fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
+pub async fn list_campaigns(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+) -> Result<Vec<CampaignSlot>, String> {
     let started = std::time::Instant::now();
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     let active: HashMap<String, (String, String)> = store
         .active_slots()
         .map_err(|e| e.to_string())?
@@ -454,8 +460,9 @@ pub async fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String>
 /// Activate an installed package on a slot (K3: replaces whatever is there).
 /// Cross-slot conflicts abort untouched; the error names both packages.
 #[tauri::command]
-pub fn activate_campaign(
+pub async fn activate_campaign(
     app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
     slot: String,
     id: String,
@@ -463,7 +470,7 @@ pub fn activate_campaign(
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
 
     // Latest installed revision of `id` (rows are sorted by revision string).
     let revs: Vec<String> = store
@@ -516,13 +523,14 @@ pub fn activate_campaign(
 #[tauri::command]
 pub fn restore_campaign(
     app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
     slot: String,
 ) -> Result<(), String> {
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     if let Err(e) = SlotManager::new(&layout, &store).restore(slot) {
         log_op(&app, "error", "restore", &format!("{}: {e}", slot.as_str()));
         return Err(e.to_string());
@@ -643,13 +651,16 @@ pub fn read_log(app: AppHandle, limit: usize) -> Result<Vec<LogEntry>, String> {
 
 /// Crash-recovery pass over all slots; returns repair notes for the log.
 #[tauri::command]
-pub async fn reconcile(app: AppHandle) -> Result<Vec<String>, String> {
+pub async fn reconcile(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
     let cfg = load_config(&app)?;
     if cfg.game_exe.is_none() {
         return Ok(Vec::new()); // nothing to reconcile without a game install
     }
     let layout = layout_from_config(&cfg)?;
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     SlotManager::new(&layout, &store)
         .with_strategy(cfg.strategy_override)
         .reconcile()
@@ -662,10 +673,13 @@ use svccm_core::launch::{self, PreflightReport};
 
 /// Verify-only pre-flight over the configured game install.
 #[tauri::command]
-pub fn launch_preflight(app: AppHandle) -> Result<PreflightReport, String> {
+pub fn launch_preflight(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+) -> Result<PreflightReport, String> {
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     Ok(launch::preflight(&layout, &store))
 }
 
@@ -712,6 +726,7 @@ pub async fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCa
 #[tauri::command]
 pub fn migrate_candidate(
     app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
     path: String,
     id: String,
@@ -723,7 +738,7 @@ pub fn migrate_candidate(
         return Err(format!("not a directory: {path}"));
     }
     let plan = plan_from_extracted(&src).map_err(|e| e.to_string())?;
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     let rev = store
         .ingest_with_progress(&id, slot, &plan, |_| true)
         .map_err(|e| e.to_string())?
@@ -745,10 +760,11 @@ pub fn discover_game_exe() -> Option<String> {
 #[tauri::command]
 pub fn remove_package(
     app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
     id: String,
 ) -> Result<(), String> {
-    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    let store = store_state.store.clone();
     store.remove_package(&id).map_err(|e| e.to_string())?;
     log_op(&app, "info", "remove", &id);
     invalidate_library(&cache);
