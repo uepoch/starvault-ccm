@@ -307,7 +307,8 @@ impl Store {
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::copy(self.blob_path(&entry.file.sha256), &target)?;
+            let src = self.blob_path(&entry.file.sha256);
+            copy_with_retry(&src, &target)?;
         }
         Ok(())
     }
@@ -356,6 +357,24 @@ impl Store {
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| pkg_err("ledger", e.to_string()))
     }
+}
+
+/// Copy with short retries: antivirus and indexers briefly hold freshly
+/// written files, which surfaces as os error 5/32 for no good reason.
+fn copy_with_retry(src: &Path, dest: &Path) -> Result<()> {
+    let mut last = None;
+    for attempt in 0..3 {
+        match std::fs::copy(src, dest) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(150 * (attempt + 1)));
+            }
+        }
+    }
+    Err(last
+        .map(|e| pkg_err(dest.display().to_string(), e.to_string()))
+        .unwrap_or_else(|| pkg_err(dest.display().to_string(), "copy failed")))
 }
 
 fn sorted_dirs(dir: &Path) -> Result<Vec<String>> {

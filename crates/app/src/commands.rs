@@ -202,6 +202,16 @@ pub fn import_ingest(
     })();
 
     let _ = std::fs::remove_dir_all(&extracted_dir);
+    match &result {
+        Ok(Some(rev)) => log_op(
+            &app,
+            "info",
+            "import",
+            &format!("{id}@{}", &rev[..8.min(rev.len())]),
+        ),
+        Ok(None) => log_op(&app, "warn", "import", &format!("{id} cancelled")),
+        Err(e) => log_op(&app, "error", "import", &format!("{id}: {e}")),
+    }
     result
 }
 
@@ -405,10 +415,21 @@ pub fn activate_campaign(app: AppHandle, slot: String, id: String) -> Result<(),
     }
 
     let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
-    manager
-        .activate(slot, &id, &rev)
-        .map_err(|e| e.to_string())?;
-    log_op(&app, "activate", &format!("{id} → {}", slot.as_str()));
+    if let Err(e) = manager.activate(slot, &id, &rev) {
+        log_op(
+            &app,
+            "error",
+            "activate",
+            &format!("{id} → {}: {e}", slot.as_str()),
+        );
+        return Err(e.to_string());
+    }
+    log_op(
+        &app,
+        "info",
+        "activate",
+        &format!("{id} → {}", slot.as_str()),
+    );
     Ok(())
 }
 
@@ -419,10 +440,11 @@ pub fn restore_campaign(app: AppHandle, slot: String) -> Result<(), String> {
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
     let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
-    SlotManager::new(&layout, &store)
-        .restore(slot)
-        .map_err(|e| e.to_string())?;
-    log_op(&app, "restore", slot.as_str());
+    if let Err(e) = SlotManager::new(&layout, &store).restore(slot) {
+        log_op(&app, "error", "restore", &format!("{}: {e}", slot.as_str()));
+        return Err(e.to_string());
+    }
+    log_op(&app, "info", "restore", slot.as_str());
     Ok(())
 }
 
@@ -430,10 +452,17 @@ pub fn restore_campaign(app: AppHandle, slot: String) -> Result<(), String> {
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct LogEntry {
-    /// RFC 3339 timestamp.
+    /// Unix seconds.
     pub time: String,
+    /// `info`, `warn`, or `error`.
+    #[serde(default = "default_level")]
+    pub level: String,
     pub kind: String,
     pub detail: String,
+}
+
+fn default_level() -> String {
+    "info".into()
 }
 
 fn log_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -444,7 +473,30 @@ fn log_path(app: &AppHandle) -> Result<PathBuf, String> {
         .join("log.jsonl"))
 }
 
-fn log_op(app: &AppHandle, kind: &str, detail: &str) {
+/// Size-based rotation: 256 KiB per generation, two kept. Good hygiene
+/// without a rotation crate.
+const LOG_ROTATE_BYTES: u64 = 256 * 1024;
+const LOG_GENERATIONS: usize = 2;
+
+fn rotate_log_if_needed(path: &PathBuf) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() < LOG_ROTATE_BYTES {
+        return;
+    }
+    // Shift log.jsonl.N -> log.jsonl.N+1, oldest out; current -> .1.
+    for gen in (1..LOG_GENERATIONS).rev() {
+        let from = path.with_extension(format!("jsonl.{gen}"));
+        let to = path.with_extension(format!("jsonl.{}", gen + 1));
+        if from.symlink_metadata().is_ok() {
+            let _ = std::fs::rename(&from, &to);
+        }
+    }
+    let _ = std::fs::rename(path, path.with_extension("jsonl.1"));
+}
+
+fn log_op(app: &AppHandle, level: &str, kind: &str, detail: &str) {
     let entry = LogEntry {
         // ponytail: second-resolution UTC stamp from std only; chrono when the
         // log needs sub-second ordering or local timezone display.
@@ -453,23 +505,26 @@ fn log_op(app: &AppHandle, kind: &str, detail: &str) {
             .map(|d| d.as_secs())
             .unwrap_or_default()
             .to_string(),
+        level: level.to_string(),
         kind: kind.to_string(),
         detail: detail.to_string(),
     };
-    if let Ok(path) = log_path(app) {
-        if let Ok(mut json) = serde_json::to_string(&entry) {
-            json.push('\n');
-            use std::io::Write;
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = f.write_all(json.as_bytes());
-            }
+    let Ok(path) = log_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    rotate_log_if_needed(&path);
+    if let Ok(mut json) = serde_json::to_string(&entry) {
+        json.push('\n');
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let _ = f.write_all(json.as_bytes());
         }
     }
 }
@@ -528,7 +583,7 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
     launch::launch(&layout)
-        .map(|()| log_op(&app, "launch", "game started"))
+        .map(|()| log_op(&app, "info", "launch", "game started"))
         .map_err(|e| e.to_string())
 }
 
@@ -536,7 +591,7 @@ pub fn launch_game(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn launch_battlenet(app: AppHandle) -> Result<(), String> {
     launch::launch_battlenet()
-        .map(|()| log_op(&app, "launch", "battlenet:// fallback"))
+        .map(|()| log_op(&app, "info", "launch", "battlenet:// fallback"))
         .map_err(|e| e.to_string())
 }
 
@@ -575,7 +630,7 @@ pub fn migrate_candidate(
         .ingest_with_progress(&id, slot, &plan, |_| true)
         .map_err(|e| e.to_string())?
         .ok_or("migration cancelled")?;
-    log_op(&app, "migrate", &format!("{id} from {path}"));
+    log_op(&app, "info", "migrate", &format!("{id} from {path}"));
     Ok(rev)
 }
 
@@ -592,6 +647,6 @@ pub fn discover_game_exe() -> Option<String> {
 pub fn remove_package(app: AppHandle, id: String) -> Result<(), String> {
     let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
     store.remove_package(&id).map_err(|e| e.to_string())?;
-    log_op(&app, "remove", &id);
+    log_op(&app, "info", "remove", &id);
     Ok(())
 }

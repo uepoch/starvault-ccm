@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Button, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { Badge, Button, Group, Stack, Table, Text, Title } from "@mantine/core";
 
 interface LogEntry {
   time: string;
+  level: string;
   kind: string;
   detail: string;
 }
+
+const LEVEL_COLORS: Record<string, string> = {
+  info: "blue",
+  warn: "yellow",
+  error: "red",
+};
 
 /// Epoch-seconds stamps from the core, rendered readably.
 function formatTime(epochSecs: string): string {
@@ -40,6 +47,7 @@ export default function Log() {
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Time</Table.Th>
+              <Table.Th>Level</Table.Th>
               <Table.Th>Operation</Table.Th>
               <Table.Th>Detail</Table.Th>
             </Table.Tr>
@@ -48,6 +56,11 @@ export default function Log() {
             {entries.map((entry, i) => (
               <Table.Tr key={i}>
                 <Table.Td style={{ whiteSpace: "nowrap" }}>{formatTime(entry.time)}</Table.Td>
+                <Table.Td>
+                  <Badge color={LEVEL_COLORS[entry.level] ?? "gray"} variant="light" size="sm">
+                    {entry.level}
+                  </Badge>
+                </Table.Td>
                 <Table.Td>{entry.kind}</Table.Td>
                 <Table.Td style={{ whiteSpace: "pre-wrap" }}>{entry.detail}</Table.Td>
               </Table.Tr>

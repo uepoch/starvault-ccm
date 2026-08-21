@@ -79,8 +79,18 @@ impl<'a> SlotManager<'a> {
         match swapped {
             Ok(()) => {
                 self.store.set_active_slot(slot, id, rev)?;
+                // The switch is committed; a union deployment failure must
+                // not read as "nothing happened".
                 self.store
-                    .apply_mods_union(&union, &self.layout.mods_dir())?;
+                    .apply_mods_union(&union, &self.layout.mods_dir())
+                    .map_err(|e| {
+                        pkg_err(
+                            slot.as_str(),
+                            format!(
+                                "activated, but deploying shared Mods\\ dependencies failed: {e}"
+                            ),
+                        )
+                    })?;
                 cleanup_if_exists(&backup);
                 let _ = self.reclaim_leftovers(slot);
                 Ok(())
