@@ -21,6 +21,7 @@ pub struct ImportPreview {
     pub title: Option<String>,
     pub author: Option<String>,
     pub version: Option<String>,
+    pub desc: Option<String>,
     /// `unknown`, or one of `wol` / `hots` / `lotv` / `nco`.
     pub slot_guess: String,
     /// The legacy pattern that produced the guess; shown as its basis.
@@ -102,6 +103,7 @@ pub fn preview_plan(plan: &PackagePlan, archive_name: Option<&str>) -> ImportPre
         title,
         author: meta.and_then(|m| m.author.clone()),
         version: meta.and_then(|m| m.version.clone()),
+        desc: meta.and_then(|m| m.desc.clone()),
         slot_guess: match plan.slot_guess.kind {
             SlotGuessKind::Unknown => "unknown".into(),
             k => k.as_str().into(),

@@ -14,6 +14,7 @@ import {
   Stack,
   Stepper,
   Text,
+  Textarea,
   TextInput,
 } from "@mantine/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -23,6 +24,7 @@ interface ImportPreview {
   title: string | null;
   author: string | null;
   version: string | null;
+  desc: string | null;
   slot_guess: string;
   matched_pattern: string | null;
   warnings: string[];
@@ -59,6 +61,7 @@ export default function ImportWizard({
   const [error, setError] = useState<string | null>(null);
   const [id, setId] = useState("");
   const [title, setTitle] = useState("");
+  const [desc, setDesc] = useState("");
   const [slot, setSlot] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [warningsOpen, setWarningsOpen] = useState(false);
@@ -107,6 +110,7 @@ export default function ImportWizard({
       setPreview(p);
       setId(p.suggested_id);
       setTitle(p.title ?? "");
+      setDesc(p.desc ?? "");
       setSlot(p.slot_guess === "unknown" ? "" : p.slot_guess);
       setStep(2);
     } catch (e) {
@@ -123,6 +127,7 @@ export default function ImportWizard({
         id,
         slot,
         title: title === "" ? null : title,
+        desc: desc === "" ? null : desc,
       });
       if (rev === null) {
         notifications.show({ color: "yellow", message: "Import cancelled." });
@@ -221,6 +226,15 @@ export default function ImportWizard({
                 placeholder={preview.title ? undefined : "Nothing detected — name it yourself"}
                 value={title}
                 onChange={(e) => setTitle(e.currentTarget.value)}
+              />
+              <Textarea
+                label="Description"
+                placeholder="Nothing detected — describe it yourself"
+                value={desc}
+                onChange={(e) => setDesc(e.currentTarget.value)}
+                autosize
+                minRows={2}
+                maxRows={4}
               />
               <div>
                 <Text size="sm" fw={500} mb={4}>

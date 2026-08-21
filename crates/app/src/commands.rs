@@ -70,6 +70,19 @@ struct ProgressEvent<'a> {
     current_file: &'a str,
 }
 
+/// Metadata built purely from user-confirmed values (K2) when the package
+/// carried none of its own.
+fn fallback_metadata(
+    title: Option<String>,
+    desc: Option<String>,
+) -> svccm_core::package::metadata::LegacyMetadata {
+    svccm_core::package::metadata::LegacyMetadata {
+        title,
+        desc,
+        ..Default::default()
+    }
+}
+
 fn slot_from_str(slot: &str) -> Result<SlotId, String> {
     SlotId::ALL
         .into_iter()
@@ -144,6 +157,7 @@ pub fn import_ingest(
     id: String,
     slot: String,
     title: Option<String>,
+    desc: Option<String>,
 ) -> Result<Option<String>, String> {
     let slot = slot_from_str(&slot)?;
     let (extracted_dir, cancel) = {
@@ -156,9 +170,16 @@ pub fn import_ingest(
 
     let result = (|| {
         let mut plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
-        // K2: the confirmed title wins over the detected one.
-        if let Some(t) = title {
-            plan.metadata.get_or_insert_with(Default::default).title = Some(t);
+        // K2: confirmed title/description win over detected ones.
+        if let Some(m) = plan.metadata.as_mut() {
+            if title.is_some() {
+                m.title = title.clone();
+            }
+            if desc.is_some() {
+                m.desc = desc.clone();
+            }
+        } else if title.is_some() || desc.is_some() {
+            plan.metadata = Some(fallback_metadata(title, desc));
         }
         let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
         let app_for_cb = app.clone();

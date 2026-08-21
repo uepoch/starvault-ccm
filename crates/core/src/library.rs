@@ -21,6 +21,13 @@ pub struct LibraryEntry {
     pub slot: String,
     /// Slots where this exact revision is currently active; empty = inactive.
     pub active_on: Vec<String>,
+    /// Metadata from the manifest, when the package carried any.
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub version: Option<String>,
+    pub desc: Option<String>,
+    /// Unix seconds when this revision was imported.
+    pub imported_at: Option<u64>,
 }
 
 /// List every installed package revision, annotated with activation status.
@@ -35,11 +42,20 @@ pub fn scan(store: &Store) -> Result<Vec<LibraryEntry>> {
                 .filter(|(_, pkg, r)| pkg == &id && r == &rev)
                 .map(|(slot, _, _)| slot.clone())
                 .collect();
+            let (title, author, version, desc, imported_at) = match store.load_manifest(&id, &rev) {
+                Ok(m) => (m.title, m.author, m.version, m.desc, m.imported_at),
+                Err(_) => (None, None, None, None, None),
+            };
             LibraryEntry {
                 id,
                 rev,
                 slot,
                 active_on,
+                title,
+                author,
+                version,
+                desc,
+                imported_at,
             }
         })
         .collect())

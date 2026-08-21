@@ -46,6 +46,12 @@ pub struct PackageManifest {
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desc: Option<String>,
+    /// Unix seconds when this revision entered the library. Not part of the
+    /// content hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_at: Option<u64>,
     pub files: Vec<ManifestFile>,
 }
 
@@ -178,6 +184,13 @@ impl Store {
             title: plan.metadata.as_ref().and_then(|m| m.title.clone()),
             author: plan.metadata.as_ref().and_then(|m| m.author.clone()),
             version: plan.metadata.as_ref().and_then(|m| m.version.clone()),
+            desc: plan.metadata.as_ref().and_then(|m| m.desc.clone()),
+            imported_at: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or_default(),
+            ),
             files,
         };
         let canonical =
