@@ -109,6 +109,11 @@ impl Store {
         self.root.join("blobs").join(&sha256[..2]).join(sha256)
     }
 
+    /// Store root, for components that stage materialized trees beside it.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Ingest a normalization plan as package `id` targeting `slot`.
     ///
     /// Copies every planned file into the blob store (deduplicated by

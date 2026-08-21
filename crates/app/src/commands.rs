@@ -328,7 +328,7 @@ pub fn activate_campaign(app: AppHandle, slot: String, id: String) -> Result<(),
         .last()
         .ok_or(format!("package `{id}` is not installed"))?;
 
-    let manager = SlotManager::new(&layout, &store);
+    let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
     manager
         .activate(slot, &id, rev)
         .map_err(|e| e.to_string())?;
@@ -414,4 +414,21 @@ pub fn read_log(app: AppHandle, limit: usize) -> Result<Vec<LogEntry>, String> {
     out.reverse();
     out.truncate(limit);
     Ok(out)
+}
+
+// --- startup reconciliation --------------------------------------------------
+
+/// Crash-recovery pass over all slots; returns repair notes for the log.
+#[tauri::command]
+pub fn reconcile(app: AppHandle) -> Result<Vec<String>, String> {
+    let cfg = load_config(&app)?;
+    if cfg.game_exe.is_none() {
+        return Ok(Vec::new()); // nothing to reconcile without a game install
+    }
+    let layout = layout_from_config(&cfg)?;
+    let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
+    SlotManager::new(&layout, &store)
+        .with_strategy(cfg.strategy_override)
+        .reconcile()
+        .map_err(|e| e.to_string())
 }

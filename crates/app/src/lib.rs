@@ -23,6 +23,7 @@ pub fn run() {
             commands::activate_campaign,
             commands::restore_campaign,
             commands::read_log,
+            commands::reconcile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

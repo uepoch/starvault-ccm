@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { MantineProvider, createTheme, Tabs } from "@mantine/core";
 import "@mantine/core/styles.css";
 import Campaigns from "./Campaigns";
@@ -11,6 +13,11 @@ const theme = createTheme({
 });
 
 export default function App() {
+  useEffect(() => {
+    // Crash recovery before anything renders state.
+    invoke("reconcile").catch(() => {});
+  }, []);
+
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
       <Tabs defaultValue="library" keepMounted={false}>
