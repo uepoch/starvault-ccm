@@ -14,10 +14,33 @@ const theme = createTheme({
   defaultRadius: "sm",
 });
 
+interface ConfigDto {
+  game_exe: string | null;
+  strategy_override: string | null;
+  crash_reports_opt_in: boolean;
+}
+
 export default function App() {
   useEffect(() => {
-    // Crash recovery before anything renders state.
+    // Crash recovery, then first-run install detection.
     invoke("reconcile").catch(() => {});
+    invoke<ConfigDto>("get_config")
+      .then((cfg) => {
+        if (!cfg.game_exe) {
+          invoke<string | null>("discover_game_exe")
+            .then((found) => {
+              if (found) {
+                return invoke("save_config", {
+                  gameExe: found,
+                  strategyOverride: cfg.strategy_override,
+                  crashReportsOptIn: cfg.crash_reports_opt_in,
+                });
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
   }, []);
 
   return (
