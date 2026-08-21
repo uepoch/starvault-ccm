@@ -16,3 +16,7 @@ webui/dist/
 # Local config
 .DS_Store
 Thumbs.db
+
+# Tauri generated
+crates/app/gen/
+crates/app/ui/dist/

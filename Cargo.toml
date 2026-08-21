@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/core"]
-# M2 adds: "crates/app"
+members = ["crates/core", "crates/app"]
 
 [workspace.package]
 version = "0.1.0"

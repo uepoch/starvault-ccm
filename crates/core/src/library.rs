@@ -9,8 +9,10 @@ use std::path::{Path, PathBuf};
 use crate::error::Result;
 use crate::store::Store;
 
+use serde::Serialize;
+
 /// One installed package revision as the Library screen renders it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LibraryEntry {
     pub id: String,
     pub rev: String,
@@ -44,7 +46,7 @@ pub fn scan(store: &Store) -> Result<Vec<LibraryEntry>> {
 
 /// Detects a legacy SC2CCM configuration at
 /// `%APPDATA%\SC2CCM\SC2CCM.txt` (decision P2: explicit migration flow).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LegacyCcmInstall {
     /// First line of the old config: path to StarCraft II.exe.
     pub exe_hint: Option<String>,
