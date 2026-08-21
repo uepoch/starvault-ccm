@@ -126,8 +126,7 @@ export default function ImportWizard({
         opId,
         id,
         slot,
-        title: title === "" ? null : title,
-        desc: desc === "" ? null : desc,
+        meta: { title: title || null, desc: desc || null },
       });
       if (rev === null) {
         notifications.show({ color: "yellow", message: "Import cancelled." });

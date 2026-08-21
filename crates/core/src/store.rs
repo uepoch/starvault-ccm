@@ -227,12 +227,22 @@ impl Store {
 
     /// All installed packages as (id, rev, slot), one row per revision.
     pub fn list_packages(&self) -> Result<Vec<(String, String, String)>> {
+        Ok(self
+            .all_manifests()?
+            .into_iter()
+            .map(|m| (m.id.clone(), m.rev, m.slot))
+            .collect())
+    }
+
+    /// Every stored manifest in one pass — callers get metadata for free
+    /// instead of re-reading each file.
+    pub fn all_manifests(&self) -> Result<Vec<PackageManifest>> {
         let mut out = Vec::new();
         let ids_dir = self.root.join("packages");
         for id in sorted_dirs(&ids_dir)? {
             for rev in sorted_dirs(&ids_dir.join(&id))? {
                 if let Ok(m) = self.load_manifest(&id, &rev) {
-                    out.push((id.clone(), rev, m.slot));
+                    out.push(m);
                 }
             }
         }
@@ -461,8 +471,7 @@ impl Store {
 
         // Sweep GC: keep only blobs referenced by surviving manifests.
         let mut referenced = std::collections::BTreeSet::new();
-        for (other_id, rev, _) in self.list_packages()? {
-            let manifest = self.load_manifest(&other_id, &rev)?;
+        for manifest in self.all_manifests()? {
             for file in manifest.files {
                 referenced.insert(file.sha256);
             }

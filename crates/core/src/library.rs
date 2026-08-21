@@ -34,28 +34,25 @@ pub struct LibraryEntry {
 pub fn scan(store: &Store) -> Result<Vec<LibraryEntry>> {
     let active = store.active_slots()?;
     Ok(store
-        .list_packages()?
+        .all_manifests()?
         .into_iter()
-        .map(|(id, rev, slot)| {
+        .map(|m| {
+            let (id, rev) = (m.id.clone(), m.rev.clone());
             let active_on = active
                 .iter()
                 .filter(|(_, pkg, r)| pkg == &id && r == &rev)
                 .map(|(slot, _, _)| slot.clone())
                 .collect();
-            let (title, author, version, desc, imported_at) = match store.load_manifest(&id, &rev) {
-                Ok(m) => (m.title, m.author, m.version, m.desc, m.imported_at),
-                Err(_) => (None, None, None, None, None),
-            };
             LibraryEntry {
                 id,
                 rev,
-                slot,
+                slot: m.slot,
                 active_on,
-                title,
-                author,
-                version,
-                desc,
-                imported_at,
+                title: m.title,
+                author: m.author,
+                version: m.version,
+                desc: m.desc,
+                imported_at: m.imported_at,
             }
         })
         .collect())

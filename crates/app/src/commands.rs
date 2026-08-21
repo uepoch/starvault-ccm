@@ -26,24 +26,35 @@ fn store_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn list_library(app: AppHandle) -> Result<Vec<LibraryEntry>, String> {
+pub fn list_library(
+    app: AppHandle,
+    cache: tauri::State<LibraryCache>,
+) -> Result<Vec<LibraryEntry>, String> {
+    let mut cached = cache.entries.lock().expect("library cache poisoned");
+    if let Some(entries) = cached.as_ref() {
+        return Ok(entries.clone());
+    }
     let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
-    library::scan(&store).map_err(|e| e.to_string())
+    let entries = library::scan(&store).map_err(|e| e.to_string())?;
+    *cached = Some(entries.clone());
+    Ok(entries)
 }
 
-/// Detect an old SC2CCM install under the OS roaming dir (P2 migration).
-#[tauri::command]
-pub fn detect_legacy_ccm(app: AppHandle) -> Result<Option<LegacyCcmInstall>, String> {
-    let appdata = app
-        .path()
+fn legacy_roaming_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data dir: {e}"))?
         // Roaming parent: `<base>/StarVault/CCM` → strip to `%APPDATA%`.
         .parent()
         .and_then(std::path::Path::parent)
         .map(std::path::Path::to_path_buf)
-        .ok_or_else(|| "cannot resolve roaming profile dir".to_string())?;
-    Ok(LegacyCcmInstall::detect(appdata))
+        .ok_or_else(|| "cannot resolve roaming profile dir".to_string())
+}
+
+/// Detect an old SC2CCM install under the OS roaming dir (P2 migration).
+#[tauri::command]
+pub fn detect_legacy_ccm(app: AppHandle) -> Result<Option<LegacyCcmInstall>, String> {
+    Ok(LegacyCcmInstall::detect(legacy_roaming_dir(&app)?))
 }
 
 // --- import wizard (K2) -----------------------------------------------------
@@ -59,6 +70,17 @@ pub struct ImportState {
     ops: Mutex<HashMap<String, ImportOp>>,
 }
 
+/// Library scan cache; any mutation clears it so tab switches read
+/// memory instead of re-walking the store.
+#[derive(Default)]
+pub struct LibraryCache {
+    entries: Mutex<Option<Vec<LibraryEntry>>>,
+}
+
+fn invalidate_library(cache: &tauri::State<LibraryCache>) {
+    *cache.entries.lock().expect("library cache poisoned") = None;
+}
+
 /// Progress event shape emitted as `import-progress`.
 #[derive(Debug, Clone, Serialize)]
 struct ProgressEvent<'a> {
@@ -68,6 +90,13 @@ struct ProgressEvent<'a> {
     files_done: u64,
     files_total: u64,
     current_file: &'a str,
+}
+
+/// User-confirmed metadata from the import wizard (K2).
+#[derive(serde::Deserialize)]
+pub struct ConfirmedMeta {
+    pub title: Option<String>,
+    pub desc: Option<String>,
 }
 
 /// Metadata built purely from user-confirmed values (K2) when the package
@@ -153,11 +182,11 @@ pub fn import_analyze(
 pub fn import_ingest(
     app: AppHandle,
     state: tauri::State<ImportState>,
+    cache: tauri::State<LibraryCache>,
     op_id: String,
     id: String,
     slot: String,
-    title: Option<String>,
-    desc: Option<String>,
+    meta: Option<ConfirmedMeta>,
 ) -> Result<Option<String>, String> {
     let slot = slot_from_str(&slot)?;
     let (extracted_dir, cancel) = {
@@ -171,12 +200,16 @@ pub fn import_ingest(
     let result = (|| {
         let mut plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
         // K2: confirmed title/description win over detected ones.
+        let (title, desc) = match &meta {
+            Some(m) => (m.title.clone(), m.desc.clone()),
+            None => (None, None),
+        };
         if let Some(m) = plan.metadata.as_mut() {
             if title.is_some() {
-                m.title = title.clone();
+                m.title = title;
             }
             if desc.is_some() {
-                m.desc = desc.clone();
+                m.desc = desc;
             }
         } else if title.is_some() || desc.is_some() {
             plan.metadata = Some(fallback_metadata(title, desc));
@@ -202,6 +235,7 @@ pub fn import_ingest(
     })();
 
     let _ = std::fs::remove_dir_all(&extracted_dir);
+    invalidate_library(&cache);
     match &result {
         Ok(Some(rev)) => log_op(
             &app,
@@ -381,7 +415,12 @@ pub fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
 /// Activate an installed package on a slot (K3: replaces whatever is there).
 /// Cross-slot conflicts abort untouched; the error names both packages.
 #[tauri::command]
-pub fn activate_campaign(app: AppHandle, slot: String, id: String) -> Result<(), String> {
+pub fn activate_campaign(
+    app: AppHandle,
+    cache: tauri::State<LibraryCache>,
+    slot: String,
+    id: String,
+) -> Result<(), String> {
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
@@ -430,12 +469,17 @@ pub fn activate_campaign(app: AppHandle, slot: String, id: String) -> Result<(),
         "activate",
         &format!("{id} → {}", slot.as_str()),
     );
+    invalidate_library(&cache);
     Ok(())
 }
 
 /// Return a slot to its plain Blizzard state.
 #[tauri::command]
-pub fn restore_campaign(app: AppHandle, slot: String) -> Result<(), String> {
+pub fn restore_campaign(
+    app: AppHandle,
+    cache: tauri::State<LibraryCache>,
+    slot: String,
+) -> Result<(), String> {
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&app)?;
     let layout = layout_from_config(&cfg)?;
@@ -445,6 +489,7 @@ pub fn restore_campaign(app: AppHandle, slot: String) -> Result<(), String> {
         return Err(e.to_string());
     }
     log_op(&app, "info", "restore", slot.as_str());
+    invalidate_library(&cache);
     Ok(())
 }
 
@@ -602,6 +647,11 @@ use svccm_core::library::MigrationCandidate;
 /// Custom campaign directories an old SC2CCM install left in Maps\Campaign.
 #[tauri::command]
 pub fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidate>, String> {
+    // Walking candidate trees is expensive under real-time AV; only bother
+    // when an old install was actually detected.
+    if LegacyCcmInstall::detect(legacy_roaming_dir(&app)?).is_none() {
+        return Ok(Vec::new());
+    }
     let cfg = load_config(&app)?;
     if cfg.game_exe.is_none() {
         return Ok(Vec::new());
@@ -615,6 +665,7 @@ pub fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidat
 #[tauri::command]
 pub fn migrate_candidate(
     app: AppHandle,
+    cache: tauri::State<LibraryCache>,
     path: String,
     id: String,
     slot: String,
@@ -631,6 +682,7 @@ pub fn migrate_candidate(
         .map_err(|e| e.to_string())?
         .ok_or("migration cancelled")?;
     log_op(&app, "info", "migrate", &format!("{id} from {path}"));
+    invalidate_library(&cache);
     Ok(rev)
 }
 
@@ -644,9 +696,14 @@ pub fn discover_game_exe() -> Option<String> {
 
 /// Remove an installed package (refuses while active on a faction).
 #[tauri::command]
-pub fn remove_package(app: AppHandle, id: String) -> Result<(), String> {
+pub fn remove_package(
+    app: AppHandle,
+    cache: tauri::State<LibraryCache>,
+    id: String,
+) -> Result<(), String> {
     let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
     store.remove_package(&id).map_err(|e| e.to_string())?;
     log_op(&app, "info", "remove", &id);
+    invalidate_library(&cache);
     Ok(())
 }
