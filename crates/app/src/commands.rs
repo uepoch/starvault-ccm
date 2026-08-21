@@ -26,9 +26,9 @@ fn store_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn list_library(
+pub async fn list_library(
     app: AppHandle,
-    cache: tauri::State<LibraryCache>,
+    cache: tauri::State<'_, LibraryCache>,
 ) -> Result<Vec<LibraryEntry>, String> {
     let mut cached = cache.entries.lock().expect("library cache poisoned");
     if let Some(entries) = cached.as_ref() {
@@ -77,8 +77,27 @@ pub struct LibraryCache {
     entries: Mutex<Option<Vec<LibraryEntry>>>,
 }
 
-fn invalidate_library(cache: &tauri::State<LibraryCache>) {
+fn invalidate_library(cache: &tauri::State<'_, LibraryCache>) {
     *cache.entries.lock().expect("library cache poisoned") = None;
+}
+
+/// Minimum recorded level: 0=info, 1=warn, 2=error. Set from config.
+static LOG_MIN_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn init_log_level(app: &AppHandle) {
+    let level = Config::load(config_path(app).unwrap_or_default())
+        .map(|c| c.log_level)
+        .unwrap_or_default();
+    set_log_level(&level);
+}
+
+pub fn set_log_level(level: &str) {
+    let rank = match level {
+        "warn" => 1,
+        "error" => 2,
+        _ => 0,
+    };
+    LOG_MIN_LEVEL.store(rank, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Progress event shape emitted as `import-progress`.
@@ -182,7 +201,7 @@ pub fn import_analyze(
 pub fn import_ingest(
     app: AppHandle,
     state: tauri::State<ImportState>,
-    cache: tauri::State<LibraryCache>,
+    cache: tauri::State<'_, LibraryCache>,
     op_id: String,
     id: String,
     slot: String,
@@ -318,6 +337,7 @@ pub struct ConfigDto {
     pub game_exe: Option<String>,
     pub strategy_override: Option<String>,
     pub crash_reports_opt_in: bool,
+    pub log_level: String,
 }
 
 #[tauri::command]
@@ -330,6 +350,7 @@ pub fn get_config(app: AppHandle) -> Result<ConfigDto, String> {
             StrategyChoice::Copy => "copy".into(),
         }),
         crash_reports_opt_in: cfg.crash_reports_opt_in,
+        log_level: cfg.log_level.clone(),
     })
 }
 
@@ -340,6 +361,7 @@ pub fn save_config(
     game_exe: Option<String>,
     strategy_override: Option<String>,
     crash_reports_opt_in: bool,
+    log_level: Option<String>,
 ) -> Result<(), String> {
     let mut cfg = load_config(&app)?;
     cfg.game_exe = game_exe.map(PathBuf::from);
@@ -360,6 +382,12 @@ pub fn save_config(
         _ => None,
     };
     cfg.crash_reports_opt_in = crash_reports_opt_in;
+    if let Some(level) = log_level {
+        if matches!(level.as_str(), "info" | "warn" | "error") {
+            cfg.log_level = level;
+        }
+    }
+    set_log_level(&cfg.log_level);
     cfg.save(config_path(&app)?).map_err(|e| e.to_string())
 }
 
@@ -376,7 +404,8 @@ pub struct CampaignSlot {
 
 /// The four slots as the UI renders them: plain campaign or package.
 #[tauri::command]
-pub fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
+pub async fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
+    let started = std::time::Instant::now();
     let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;
     let active: HashMap<String, (String, String)> = store
         .active_slots()
@@ -384,7 +413,7 @@ pub fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
         .into_iter()
         .map(|(slot, id, rev)| (slot, (id, rev)))
         .collect();
-    Ok(SlotId::ALL
+    let slots: Vec<CampaignSlot> = SlotId::ALL
         .into_iter()
         .map(|slot| {
             let (title, pkg_id, rev, author, version) = match active.get(slot.as_str()) {
@@ -409,7 +438,17 @@ pub fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
                 version,
             }
         })
-        .collect())
+        .collect();
+    let elapsed = started.elapsed();
+    if elapsed > std::time::Duration::from_millis(200) {
+        log_op(
+            &app,
+            "warn",
+            "perf",
+            &format!("list_campaigns took {elapsed:?}"),
+        );
+    }
+    Ok(slots)
 }
 
 /// Activate an installed package on a slot (K3: replaces whatever is there).
@@ -417,7 +456,7 @@ pub fn list_campaigns(app: AppHandle) -> Result<Vec<CampaignSlot>, String> {
 #[tauri::command]
 pub fn activate_campaign(
     app: AppHandle,
-    cache: tauri::State<LibraryCache>,
+    cache: tauri::State<'_, LibraryCache>,
     slot: String,
     id: String,
 ) -> Result<(), String> {
@@ -477,7 +516,7 @@ pub fn activate_campaign(
 #[tauri::command]
 pub fn restore_campaign(
     app: AppHandle,
-    cache: tauri::State<LibraryCache>,
+    cache: tauri::State<'_, LibraryCache>,
     slot: String,
 ) -> Result<(), String> {
     let slot = slot_from_str(&slot)?;
@@ -542,6 +581,14 @@ fn rotate_log_if_needed(path: &PathBuf) {
 }
 
 fn log_op(app: &AppHandle, level: &str, kind: &str, detail: &str) {
+    let rank = match level {
+        "warn" => 1,
+        "error" => 2,
+        _ => 0,
+    };
+    if rank < LOG_MIN_LEVEL.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let entry = LogEntry {
         // ponytail: second-resolution UTC stamp from std only; chrono when the
         // log needs sub-second ordering or local timezone display.
@@ -596,7 +643,7 @@ pub fn read_log(app: AppHandle, limit: usize) -> Result<Vec<LogEntry>, String> {
 
 /// Crash-recovery pass over all slots; returns repair notes for the log.
 #[tauri::command]
-pub fn reconcile(app: AppHandle) -> Result<Vec<String>, String> {
+pub async fn reconcile(app: AppHandle) -> Result<Vec<String>, String> {
     let cfg = load_config(&app)?;
     if cfg.game_exe.is_none() {
         return Ok(Vec::new()); // nothing to reconcile without a game install
@@ -646,7 +693,7 @@ use svccm_core::library::MigrationCandidate;
 
 /// Custom campaign directories an old SC2CCM install left in Maps\Campaign.
 #[tauri::command]
-pub fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidate>, String> {
+pub async fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidate>, String> {
     // Walking candidate trees is expensive under real-time AV; only bother
     // when an old install was actually detected.
     if LegacyCcmInstall::detect(legacy_roaming_dir(&app)?).is_none() {
@@ -665,7 +712,7 @@ pub fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidat
 #[tauri::command]
 pub fn migrate_candidate(
     app: AppHandle,
-    cache: tauri::State<LibraryCache>,
+    cache: tauri::State<'_, LibraryCache>,
     path: String,
     id: String,
     slot: String,
@@ -698,7 +745,7 @@ pub fn discover_game_exe() -> Option<String> {
 #[tauri::command]
 pub fn remove_package(
     app: AppHandle,
-    cache: tauri::State<LibraryCache>,
+    cache: tauri::State<'_, LibraryCache>,
     id: String,
 ) -> Result<(), String> {
     let store = Store::open(store_root(&app)?).map_err(|e| e.to_string())?;

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
 import {
+  Accordion,
   Button,
   Card,
   Group,
@@ -19,6 +20,7 @@ interface ConfigDto {
   game_exe: string | null;
   strategy_override: string | null;
   crash_reports_opt_in: boolean;
+  log_level: string;
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -27,6 +29,7 @@ export default function Settings() {
   const [gameExe, setGameExe] = useState<string>("");
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
+  const [logLevel, setLogLevel] = useState("info");
   const [confirmClear, setConfirmClear] = useState(false);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -39,6 +42,7 @@ export default function Settings() {
         setGameExe(cfg.game_exe ?? "");
         setStrategy(cfg.strategy_override ?? "auto");
         setCrashReports(cfg.crash_reports_opt_in);
+        setLogLevel(cfg.log_level ?? "info");
         loadedRef.current = true;
       })
       .catch((e) => notifications.show({ color: "red", title: "Load failed", message: String(e) }));
@@ -54,6 +58,7 @@ export default function Settings() {
           gameExe: gameExe === "" ? null : gameExe,
           strategyOverride: strategy === "auto" ? null : strategy,
           crashReportsOptIn: crashReports,
+          logLevel,
         });
         setStatus("saved");
         setErrorMsg(null);
@@ -65,7 +70,7 @@ export default function Settings() {
       }
     }, 700);
     return () => clearTimeout(t);
-  }, [gameExe, strategy, crashReports]);
+  }, [gameExe, strategy, crashReports, logLevel]);
 
   const browse = async () => {
     const selected = await open({
@@ -82,6 +87,7 @@ export default function Settings() {
 
       <Card withBorder>
         <Stack gap="sm">
+          <Text fw={500}>General</Text>
           <TextInput
             label="StarCraft II.exe"
             placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
@@ -122,29 +128,52 @@ export default function Settings() {
               </Text>
             )}
           </Group>
-          <Select
-            label="Switch strategy"
-            data={[
-              { value: "auto", label: "Auto (junction first)" },
-              { value: "junction", label: "Junctions" },
-              { value: "copy", label: "Copy" },
-            ]}
-            value={strategy}
-            onChange={setStrategy}
-          />
           <Switch
             label="Crash reports"
             description="Opt-in. Sends crash data only; no analytics exist."
             checked={crashReports}
             onChange={(e) => setCrashReports(e.currentTarget.checked)}
           />
-          <Group justify="flex-end">
-            <Text size="xs" c="dimmed">
-              StarVault CCM 0.1.0 · unofficial builds must self-declare
-            </Text>
-          </Group>
         </Stack>
       </Card>
+
+      <Accordion variant="separated">
+        <Accordion.Item value="advanced">
+          <Accordion.Control>Advanced</Accordion.Control>
+          <Accordion.Panel>
+            <Stack gap="sm">
+              <Select
+                label="Switch strategy"
+                description="How campaign folders are placed into the game directory."
+                data={[
+                  { value: "auto", label: "Auto (junction first)" },
+                  { value: "junction", label: "Junctions" },
+                  { value: "copy", label: "Copy" },
+                ]}
+                value={strategy}
+                onChange={setStrategy}
+              />
+              <Select
+                label="Log level"
+                description="Minimum severity kept in the operation log."
+                data={[
+                  { value: "info", label: "Info — everything" },
+                  { value: "warn", label: "Warnings and errors" },
+                  { value: "error", label: "Errors only" },
+                ]}
+                value={logLevel}
+                onChange={(v) => setLogLevel(v ?? "info")}
+              />
+            </Stack>
+          </Accordion.Panel>
+        </Accordion.Item>
+      </Accordion>
+
+      <Group justify="flex-end">
+        <Text size="xs" c="dimmed">
+          StarVault CCM 0.1.0 · unofficial builds must self-declare
+        </Text>
+      </Group>
 
       <Card withBorder color="red">
         <Stack gap="sm">

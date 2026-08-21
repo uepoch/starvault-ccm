@@ -11,7 +11,7 @@ use crate::error::{pkg_err, Result};
 
 /// User settings persisted across runs. Defaults are sensible; every field
 /// is overridable in Settings.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Validated path to StarCraft II.exe.
@@ -20,6 +20,19 @@ pub struct Config {
     pub strategy_override: Option<StrategyChoice>,
     /// Opt-in crash reporting only (decision S3). No analytics exist.
     pub crash_reports_opt_in: bool,
+    /// Minimum operation-log level recorded: `info`, `warn`, or `error`.
+    pub log_level: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            game_exe: None,
+            strategy_override: None,
+            crash_reports_opt_in: false,
+            log_level: "info".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +82,7 @@ mod tests {
             game_exe: Some(std::path::PathBuf::from("C:\\Games\\SC2\\StarCraft II.exe")),
             strategy_override: Some(StrategyChoice::Copy),
             crash_reports_opt_in: true,
+            ..Default::default()
         };
         cfg.save(&path).unwrap();
         assert_eq!(Config::load(&path).unwrap(), cfg);

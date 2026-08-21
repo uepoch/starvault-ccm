@@ -12,6 +12,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::ImportState::default())
         .manage(commands::LibraryCache::default())
+        .setup(|app| {
+            commands::init_log_level(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::list_library,
             commands::detect_legacy_ccm,
