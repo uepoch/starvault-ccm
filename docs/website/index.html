@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StarVault CCM — StarCraft II custom campaign manager</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; background: #10161d; color: #dfe9f2;
+    font: 16px/1.6 system-ui, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 4rem 1.5rem; }
+  h1 { font-size: 2rem; margin: 0 0 .25rem; }
+  h1 span { color: #4a9eff; }
+  .tagline { color: #8fa3b8; margin-top: 0; }
+  h2 { font-size: 1.1rem; margin-top: 2.5rem; }
+  ul { padding-left: 1.25rem; }
+  .slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .75rem; }
+  .slot { border: 1px solid #263444; border-radius: 6px; padding: .75rem; text-align: center; }
+  .slot b { display: block; }
+  .slot small { color: #8fa3b8; }
+  a.btn {
+    display: inline-block; background: #4a9eff; color: #10161d; font-weight: 600;
+    padding: .6rem 1.4rem; border-radius: 6px; text-decoration: none;
+  }
+  footer { margin-top: 3rem; color: #8fa3b8; font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>StarVault <span>CCM</span></h1>
+  <p class="tagline">Install, switch, and launch StarCraft II custom campaigns.</p>
+
+  <p>StarVault CCM manages your custom campaigns the way you already think
+  about them: four campaign slots, one click each. Import any community
+  package zip — any layout — and switch campaigns without touching a file
+  explorer.</p>
+
+  <div class="slots">
+    <div class="slot"><b>WoL</b><small>Wings of Liberty</small></div>
+    <div class="slot"><b>HotS</b><small>Heart of the Swarm</small></div>
+    <div class="slot"><b>LotV</b><small>Legacy of the Void</small></div>
+    <div class="slot"><b>NCO</b><small>Nova Covert Ops</small></div>
+  </div>
+
+  <h2>Why it's safe</h2>
+  <ul>
+    <li><strong>No overwrites, ever.</strong> Two packages shipping different
+    content for the same dependency are caught before anything changes on
+    disk.</li>
+    <li><strong>Every import is confirmed.</strong> Detected title, author,
+    and slot guess are shown for you to check — nothing is silently guessed
+    into the wrong campaign.</li>
+    <li><strong>Switches are transactions.</strong> Stage, verify, swap, roll
+    back on failure. A crash mid-switch repairs itself at next startup.</li>
+    <li><strong>Your old installs migrate.</strong> Existing CCM campaigns are
+    imported through the same checked pipeline; originals stay untouched.</li>
+  </ul>
+
+  <h2>Download</h2>
+  <p>
+    <a class="btn" href="#" aria-disabled="true">v1.0 for Windows — coming soon</a>
+  </p>
+  <p style="color:#8fa3b8">Pre-alpha. Not yet downloadable.</p>
+
+  <footer>
+    StarCraft II is a trademark of Blizzard Entertainment. This tool is
+    unofficial; modified builds must self-declare as unofficial.
+    <br />Source and issue tracker: this project's repository.
+  </footer>
+</main>
+</body>
+</html>
