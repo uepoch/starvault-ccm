@@ -10,3 +10,4 @@ pub mod container;
 pub mod docinfo;
 pub mod header;
 pub mod metadata;
+pub mod normalize;

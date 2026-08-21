@@ -7,6 +7,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+hex = "0.4.3"
+sha2 = "0.11.0"
 thiserror.workspace = true
 wow-mpq = "0.7.0"
 

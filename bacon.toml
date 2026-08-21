@@ -1,0 +1,25 @@
+# Background diagnostics for humans and agents.
+#
+#   bacon            # TUI on the default job (clippy)
+#   bacon -j check   # plain type-check job
+#
+# Headless mode for agent sessions (already running if `pgrep bacon` shows it):
+#
+#   setsid nohup bacon --headless -j clippy > /tmp/bacon.log 2>&1 < /dev/null &
+#
+# The clippy job writes the full cargo JSON diagnostic stream to
+# target/bacon/clippy.json on every pass. Agents: READ that file instead of
+# re-running cargo — see AGENTS.md.
+
+[jobs.clippy]
+command = [
+  "sh", "-c",
+  "mkdir -p target/bacon && cargo clippy --all-targets --message-format=json --color never | tee target/bacon/clippy.json >/dev/null",
+]
+analyzer = "cargo_json"
+need_stdout = true
+allow_warnings = true
+
+[jobs.check]
+command = ["cargo", "check", "--all-targets", "--color", "never"]
+allow_warnings = true
