@@ -191,6 +191,7 @@ struct ProgressEvent<'a> {
 #[derive(serde::Deserialize)]
 pub struct ConfirmedMeta {
     pub title: Option<String>,
+    pub version: Option<String>,
     pub desc: Option<String>,
 }
 
@@ -198,10 +199,12 @@ pub struct ConfirmedMeta {
 /// carried none of its own.
 fn fallback_metadata(
     title: Option<String>,
+    version: Option<String>,
     desc: Option<String>,
 ) -> svccm_core::package::metadata::LegacyMetadata {
     svccm_core::package::metadata::LegacyMetadata {
         title,
+        version,
         desc,
         ..Default::default()
     }
@@ -344,20 +347,23 @@ pub fn import_ingest(
 
     let result = (|| {
         let mut plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
-        // K2: confirmed title/description win over detected ones.
-        let (title, desc) = match &meta {
-            Some(m) => (m.title.clone(), m.desc.clone()),
-            None => (None, None),
+        // K2: confirmed title/version/description win over detected ones.
+        let (title, version, desc) = match &meta {
+            Some(m) => (m.title.clone(), m.version.clone(), m.desc.clone()),
+            None => (None, None, None),
         };
         if let Some(m) = plan.metadata.as_mut() {
             if title.is_some() {
                 m.title = title;
             }
+            if version.is_some() {
+                m.version = version;
+            }
             if desc.is_some() {
                 m.desc = desc;
             }
-        } else if title.is_some() || desc.is_some() {
-            plan.metadata = Some(fallback_metadata(title, desc));
+        } else if title.is_some() || version.is_some() || desc.is_some() {
+            plan.metadata = Some(fallback_metadata(title, version, desc));
         }
         let store = store_state.store()?;
         let app_for_cb = app.clone();

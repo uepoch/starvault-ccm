@@ -66,6 +66,7 @@ export default function ImportWizard({
   const [error, setError] = useState<string | null>(null);
   const [id, setId] = useState("");
   const [title, setTitle] = useState("");
+  const [version, setVersion] = useState("");
   const [desc, setDesc] = useState("");
   const [slot, setSlot] = useState("");
   const [result, setResult] = useState<string | null>(null);
@@ -129,6 +130,7 @@ export default function ImportWizard({
       setPreview(p);
       setId(p.suggested_id);
       setTitle(p.title ?? "");
+      setVersion(p.version ?? "");
       setDesc(p.desc ?? "");
       setSlot(p.slot_guess === "unknown" ? "" : p.slot_guess);
       setStep(2);
@@ -147,7 +149,7 @@ export default function ImportWizard({
         opId,
         id,
         slot,
-        meta: { title: title || null, desc: desc || null },
+        meta: { title: title || null, version: version || null, desc: desc || null },
       });
       if (rev === null) {
         notifications.show({ color: "yellow", message: "Import cancelled." });
@@ -246,6 +248,12 @@ export default function ImportWizard({
                 label="Package id"
                 value={id}
                 onChange={(e) => setId(e.currentTarget.value)}
+              />
+              <TextInput
+                label="Version"
+                placeholder={preview.version ? undefined : "1.0"}
+                value={version}
+                onChange={(e) => setVersion(e.currentTarget.value)}
               />
               <TextInput
                 label="Title"
