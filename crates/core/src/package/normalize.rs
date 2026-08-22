@@ -12,7 +12,6 @@
 //! - wrapped:     any single wrapper folder around either of the above
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::error::{pkg_err, Result};
@@ -380,20 +379,5 @@ fn same_content(a: &Path, b: &Path) -> Option<bool> {
     if len_a != len_b {
         return Some(false);
     }
-    Some(hash_file(a).ok()? == hash_file(b).ok()?)
-}
-
-fn hash_file(path: &Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buf)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buf[..read]);
-    }
-    Ok(hex::encode(hasher.finalize()))
+    Some(crate::store::hash_file(a).ok()? == crate::store::hash_file(b).ok()?)
 }

@@ -17,7 +17,7 @@ import {
 } from "@mantine/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
-import { FACTION_COLORS } from "./factions";
+import { FACTION_COLORS, SLOTS } from "./factions";
 import { errConflict, errMessage } from "./errors";
 
 interface ImportPreview {
@@ -39,13 +39,6 @@ interface ProgressEvent {
   files_total: number;
   current_file: string;
 }
-
-const SLOTS = [
-  { label: "WoL", value: "wol" },
-  { label: "HotS", value: "hots" },
-  { label: "LotV", value: "lotv" },
-  { label: "NCO", value: "nco" },
-];
 
 export default function ImportWizard({
   knownIds,
@@ -273,8 +266,11 @@ export default function ImportWizard({
               <div>
                 <Text size="sm" fw={500} mb={4}>
                   Faction
-                  {preview.slot_guess === "unknown" &&
-                    " — nothing detected, pick the one this was built for"}
+                  {preview.slot_guess === "unknown"
+                    ? " — nothing detected, pick the one this was built for"
+                    : preview.matched_pattern
+                      ? ` — detected via “${preview.matched_pattern}”`
+                      : ""}
                 </Text>
                 <Group gap="xs">
                   {SLOTS.map((f) => (

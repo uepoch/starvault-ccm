@@ -36,14 +36,6 @@ pub enum EnvironmentError {
     JunctionsUnsupported,
 }
 
-/// A bug. Never blamed on the user; reported via `report_error()`.
-#[derive(Debug, Error)]
-#[error("internal error in {location}: {message}")]
-pub struct InternalError {
-    pub location: &'static str,
-    pub message: String,
-}
-
 #[derive(Debug, Error)]
 pub enum Error {
     #[error(transparent)]
@@ -52,8 +44,6 @@ pub enum Error {
     Package(#[from] PackageError),
     #[error(transparent)]
     Environment(#[from] EnvironmentError),
-    #[error(transparent)]
-    Internal(#[from] InternalError),
 }
 
 impl From<std::io::Error> for Error {
@@ -73,15 +63,4 @@ pub fn pkg_err(context: impl Into<String>, detail: impl Into<String>) -> Error {
         context: context.into(),
         detail: detail.into(),
     })
-}
-
-/// Convenience constructor for internal errors.
-#[macro_export]
-macro_rules! internal {
-    ($msg:expr) => {
-        $crate::Error::Internal($crate::error::InternalError {
-            location: concat!(module_path!(), "::", line!()),
-            message: $msg.to_string(),
-        })
-    };
 }

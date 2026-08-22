@@ -256,7 +256,7 @@ impl SavesManager {
                 std::fs::copy(&path, &dest)?;
                 restored += 1;
             } else if path.is_dir() {
-                copy_tree(&path, &dest)?;
+                crate::slots::copy_tree(&path, &dest)?;
                 restored += 1;
             }
         }
@@ -274,18 +274,4 @@ impl SavesManager {
         }
         removed
     }
-}
-
-fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
-    std::fs::create_dir_all(dest)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let target = dest.join(entry.file_name());
-        if entry.path().is_dir() {
-            copy_tree(&entry.path(), &target)?;
-        } else {
-            std::fs::copy(entry.path(), &target)?;
-        }
-    }
-    Ok(())
 }

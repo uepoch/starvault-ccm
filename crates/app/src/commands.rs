@@ -730,13 +730,13 @@ pub async fn activate_campaign(
     }
     would_deploy.push(candidate.clone());
     let refs: Vec<&PackageManifest> = would_deploy.iter().collect();
-    let conflicts = store.find_conflicts(&refs);
+    let (_, conflicts) = store.plan_mods_union(&refs);
     if let Some(first) = conflicts.first() {
         // The conflicting owner that is not the package being activated.
-        let other_id = if first.second.0 == id {
-            &first.first.0
+        let other_id = if first.second == id {
+            &first.first
         } else {
-            &first.second.0
+            &first.second
         };
         let other_slot = other_slots
             .get(other_id.as_str())

@@ -13,15 +13,6 @@ use crate::error::{pkg_err, Result};
 use crate::layout::{GameLayout, SlotId, WindowsLayout};
 use crate::store::{PackageManifest, Store};
 
-/// Phases of a switch transaction (for progress events later).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SwitchPhase {
-    Staging,
-    Verified,
-    Committed,
-    RolledBack,
-}
-
 /// Which package revision a slot points at. `None` = plain campaign.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotState {
@@ -69,7 +60,16 @@ impl<'a> SlotManager<'a> {
         }
         manifests.push(manifest.clone());
         let refs: Vec<&PackageManifest> = manifests.iter().collect();
-        let union = self.store.plan_mods_union(&refs)?;
+        let (union, conflicts) = self.store.plan_mods_union(&refs);
+        if let Some(c) = conflicts.first() {
+            return Err(crate::error::Error::User(crate::UserError {
+                message: format!(
+                    "dependency conflict on {}: `{}` and `{}` ship different content",
+                    c.target, c.first, c.second
+                ),
+                path: None,
+            }));
+        }
 
         // --- swap ----------------------------------------------------------
         let slot_dir = self.layout.slot_dir(slot);
@@ -406,7 +406,7 @@ fn clear_dir_contents(dir: &Path, protect: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
+pub(crate) fn copy_tree(src: &Path, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(dest)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;

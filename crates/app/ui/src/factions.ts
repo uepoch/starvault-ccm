@@ -23,3 +23,9 @@ export const FACTION_COLORS: Record<string, string> = {
   lotv: "yellow",
   nco: "cyan",
 };
+
+/** Slot picker options shared by the import wizard and migration banner. */
+export const SLOTS = Object.entries(FACTION_TITLES).map(([value, label]) => ({
+  label,
+  value,
+}));

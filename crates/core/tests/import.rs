@@ -145,7 +145,8 @@ fn union_replaces_leftover_packed_mod_file_with_directory_form() {
     std::fs::write(mods_dir.join("RaynorRogueRaw.SC2Mod"), b"packed-leftover").unwrap();
 
     let refs = [&manifest];
-    let union = store.plan_mods_union(&refs).unwrap();
+    let (union, conflicts) = store.plan_mods_union(&refs);
+    assert!(conflicts.is_empty());
     store.apply_mods_union(&union, &mods_dir).unwrap();
 
     // The leftover file is gone; the unpacked tree is live.

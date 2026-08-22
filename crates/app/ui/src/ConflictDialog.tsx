@@ -3,13 +3,7 @@ import { Button, Group, Modal, Stack, Text } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
 import { notifications } from "@mantine/notifications";
 import { errMessage, type ConflictInfo } from "./errors";
-
-const FACTION_TITLES: Record<string, string> = {
-  wol: "WoL",
-  hots: "HotS",
-  lotv: "LotV",
-  nco: "NCO",
-};
+import { FACTION_TITLES } from "./factions";
 
 export interface ConflictDialogState {
   info: ConflictInfo;

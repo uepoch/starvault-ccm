@@ -60,8 +60,9 @@ pub struct PackageManifest {
 pub struct Conflict {
     /// Game-relative path under `Mods\`, lowercased for comparison.
     pub target: String,
-    pub first: (String, String),
-    pub second: (String, String),
+    /// Owning package ids, first-seen order.
+    pub first: String,
+    pub second: String,
 }
 
 /// One file in the union of active packages' `mods/**` subtrees.
@@ -102,10 +103,7 @@ impl Store {
                  rev       TEXT NOT NULL,
                  PRIMARY KEY (game_path, rev)
              );
-             CREATE TABLE IF NOT EXISTS blob_refs (
-                 sha256   TEXT PRIMARY KEY,
-                 refcount INTEGER NOT NULL DEFAULT 0
-             );",
+",
         )
         .map_err(|e| pkg_err(root.display().to_string(), format!("ledger init: {e}")))?;
 
@@ -302,63 +300,17 @@ impl Store {
         Ok(out)
     }
 
-    /// All cross-package conflicts in a would-be union: same `Mods\` path,
-    /// different bytes. `plan_mods_union` blocks on these; this collects
-    /// every one so the UI can show details.
-    pub fn find_conflicts(&self, manifests: &[&PackageManifest]) -> Vec<Conflict> {
-        let mut by_lower: BTreeMap<String, (&str, &str)> = BTreeMap::new();
-        let mut seen_targets: std::collections::BTreeSet<String> = Default::default();
-        let mut out = Vec::new();
-        for manifest in manifests {
-            for file in &manifest.files {
-                let Some(rel) = file.path.strip_prefix("mods/") else {
-                    continue;
-                };
-                let key = rel.to_ascii_lowercase();
-                match by_lower.get(&key) {
-                    None => {
-                        by_lower.insert(key, (manifest.id.as_str(), file.sha256.as_str()));
-                    }
-                    Some((owner, sha)) => {
-                        if *sha != file.sha256 && seen_targets.insert(key.clone()) {
-                            out.push(Conflict {
-                                target: format!("Mods\\{rel}"),
-                                first: ((*owner).to_string(), String::new()),
-                                second: (manifest.id.clone(), String::new()),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// Copy all `slot/**` files of a manifest into `dest`.
-    pub fn materialize_slot(&self, manifest: &PackageManifest, dest: &Path) -> Result<()> {
-        std::fs::create_dir_all(dest)?;
-        for file in &manifest.files {
-            let Some(rel) = file.path.strip_prefix("slot/") else {
-                continue;
-            };
-            let target = dest.join(rel);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(self.blob_path(&file.sha256), &target)?;
-        }
-        Ok(())
-    }
-
-    /// Compute the union of `mods/**` across manifests, detecting conflicts:
-    /// same target path (case-insensitive), different content (M5).
+    /// Compute the union of `mods/**` across manifests plus every content
+    /// conflict found on the way (same path case-insensitively, different
+    /// bytes). One pass serves both the UI pre-check and the slot swap.
     pub fn plan_mods_union<'a>(
         &self,
         manifests: &[&'a PackageManifest],
-    ) -> Result<Vec<ModsUnionEntry<'a>>> {
+    ) -> (Vec<ModsUnionEntry<'a>>, Vec<Conflict>) {
         // Index by lowercased path for Windows-semantics comparison; keep the
         // first-seen spelling for the on-disk layout.
         let mut by_lower: BTreeMap<String, ModsUnionEntry<'a>> = BTreeMap::new();
+        let mut conflicts = Vec::new();
 
         for manifest in manifests {
             for file in &manifest.files {
@@ -379,20 +331,34 @@ impl Store {
                     }
                     Some(existing) => {
                         if existing.file.sha256 != file.sha256 {
-                            return Err(crate::error::Error::User(crate::UserError {
-                                message: format!(
-                                    "dependency conflict on Mods\\{rel}: `{}` and `{}` ship different content",
-                                    existing.owner, manifest.id
-                                ),
-                                path: None,
-                            }));
+                            conflicts.push(Conflict {
+                                target: format!("Mods\\{rel}"),
+                                first: existing.owner.to_string(),
+                                second: manifest.id.clone(),
+                            });
                         }
                         // identical content: share silently
                     }
                 }
             }
         }
-        Ok(by_lower.into_values().collect())
+        (by_lower.into_values().collect(), conflicts)
+    }
+
+    /// Copy all `slot/**` files of a manifest into `dest`.
+    pub fn materialize_slot(&self, manifest: &PackageManifest, dest: &Path) -> Result<()> {
+        std::fs::create_dir_all(dest)?;
+        for file in &manifest.files {
+            let Some(rel) = file.path.strip_prefix("slot/") else {
+                continue;
+            };
+            let target = dest.join(rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(self.blob_path(&file.sha256), &target)?;
+        }
+        Ok(())
     }
 
     /// Write the union's blobs into `mods_dir`, preserving relative paths.

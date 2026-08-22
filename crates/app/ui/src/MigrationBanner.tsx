@@ -1,18 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Alert, Button, Group, Select, Stack, Text } from "@mantine/core";
+import { SLOTS } from "./factions";
 
 interface Candidate {
   path: string;
   name: string;
 }
-
-const SLOTS = [
-  { label: "WoL", value: "wol" },
-  { label: "HotS", value: "hots" },
-  { label: "LotV", value: "lotv" },
-  { label: "NCO", value: "nco" },
-];
 
 /// Per-campaign import list for an old SC2CCM install (P2). Old files stay
 /// in place; cleanup is manual and documented.
