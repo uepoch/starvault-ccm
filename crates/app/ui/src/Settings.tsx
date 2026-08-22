@@ -4,9 +4,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
 import {
-  Accordion,
   Button,
   Card,
+  Grid,
   Group,
   Modal,
   Select,
@@ -106,66 +106,68 @@ export default function Settings() {
   };
 
   return (
-    <Stack p="lg" gap="lg" maw={640}>
+    <Stack p="lg" gap="lg" maw={980}>
       <Title order={2}>Settings</Title>
 
-      <Card withBorder>
-        <Stack gap="sm">
-          <Text fw={500}>General</Text>
-          <TextInput
-            label="StarCraft II.exe"
-            placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
-            value={gameExe}
-            onChange={(e) => setGameExe(e.currentTarget.value)}
-            error={status === "error" ? errorMsg : undefined}
-          />
-          <Group gap="xs">
-            <Button variant="light" size="xs" onClick={browse}>
-              Browse…
-            </Button>
-            <Button
-              variant="light"
-              size="xs"
-              onClick={async () => {
-                const found = await invoke<string | null>("discover_game_exe");
-                if (found) {
-                  setGameExe(found);
-                  notifications.show({ color: "green", message: "Found StarCraft II." });
-                } else {
-                  notifications.show({
-                    color: "yellow",
-                    message: "Could not find an SC2 install automatically — browse for it.",
-                  });
-                }
-              }}
-            >
-              Auto-detect
-            </Button>
-            {status === "saving" && (
-              <Text size="xs" c="dimmed">
-                Saving…
-              </Text>
-            )}
-            {status === "saved" && (
-              <Text size="xs" c="dimmed">
-                Saved ✓
-              </Text>
-            )}
-          </Group>
-          <Switch
-            label="Crash reports"
-            description="Opt-in. Sends crash data only; no analytics exist."
-            checked={crashReports}
-            onChange={(e) => setCrashReports(e.currentTarget.checked)}
-          />
-        </Stack>
-      </Card>
-
-      <Accordion variant="separated">
-        <Accordion.Item value="advanced">
-          <Accordion.Control>Advanced</Accordion.Control>
-          <Accordion.Panel>
+      <Grid>
+        <Grid.Col span={6}>
+          <Card withBorder>
             <Stack gap="sm">
+              <Text fw={500}>General</Text>
+              <TextInput
+                label="StarCraft II.exe"
+                placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
+                value={gameExe}
+                onChange={(e) => setGameExe(e.currentTarget.value)}
+                error={status === "error" ? errorMsg : undefined}
+              />
+              <Group gap="xs">
+                <Button variant="light" size="xs" onClick={browse}>
+                  Browse…
+                </Button>
+                <Button
+                  variant="light"
+                  size="xs"
+                  onClick={async () => {
+                    const found = await invoke<string | null>("discover_game_exe");
+                    if (found) {
+                      setGameExe(found);
+                      notifications.show({ color: "green", message: "Found StarCraft II." });
+                    } else {
+                      notifications.show({
+                        color: "yellow",
+                        message: "Could not find an SC2 install automatically — browse for it.",
+                      });
+                    }
+                  }}
+                >
+                  Auto-detect
+                </Button>
+                {status === "saving" && (
+                  <Text size="xs" c="dimmed">
+                    Saving…
+                  </Text>
+                )}
+                {status === "saved" && (
+                  <Text size="xs" c="dimmed">
+                    Saved ✓
+                  </Text>
+                )}
+              </Group>
+              <Switch
+                label="Crash reports"
+                description="Opt-in. Sends crash data only; no analytics exist."
+                checked={crashReports}
+                onChange={(e) => setCrashReports(e.currentTarget.checked)}
+              />
+            </Stack>
+          </Card>
+        </Grid.Col>
+
+        <Grid.Col span={6}>
+          <Card withBorder>
+            <Stack gap="sm">
+              <Text fw={500}>Advanced</Text>
               <Select
                 label="Switch strategy"
                 description="How campaign folders are placed into the game directory."
@@ -208,9 +210,9 @@ export default function Settings() {
                 />
               )}
             </Stack>
-          </Accordion.Panel>
-        </Accordion.Item>
-      </Accordion>
+          </Card>
+        </Grid.Col>
+      </Grid>
 
       <Card withBorder color="red">
         <Stack gap="sm">
