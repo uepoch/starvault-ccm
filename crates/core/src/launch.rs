@@ -221,7 +221,10 @@ fn ensure_battlenet_running() {
             std::env::var("USERNAME").unwrap_or_default()
         ),
     ];
-    let Some(exe) = candidates.iter().find(|p| std::path::Path::new(p).is_file()) else {
+    let Some(exe) = candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).is_file())
+    else {
         return;
     };
     if let Err(e) = Command::new(exe).args(["--exec=launch BNA"]).spawn() {
@@ -268,10 +271,15 @@ pub fn launch(layout: &WindowsLayout) -> Result<()> {
         return Err(pkg_err(exe.display().to_string(), "executable not found"));
     }
     ensure_battlenet_running();
+    // Exactly what the Battle.net client passes (captured from a live
+    // launch): silent SSO against the running agent plus product context.
+    // Without these the game falls back to the legacy login page.
+    let args = ["-sso=1", "-launch", "-uid", "s2"];
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         Command::new(&exe)
+            .args(args)
             .creation_flags(0x0000_0008 | 0x0000_0400) // DETACHED_PROCESS | NEW_PROCESS_GROUP
             .spawn()
             .map_err(|e| pkg_err(exe.display().to_string(), e.to_string()))?;
@@ -279,6 +287,7 @@ pub fn launch(layout: &WindowsLayout) -> Result<()> {
     #[cfg(not(windows))]
     {
         Command::new(&exe)
+            .args(args)
             .spawn()
             .map_err(|e| pkg_err(exe.display().to_string(), e.to_string()))?;
     }
