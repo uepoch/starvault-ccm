@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
 import {
+  Anchor,
   Button,
   Card,
   Grid,
@@ -231,7 +232,16 @@ export default function Settings() {
 
       <Group justify="flex-end">
         <Text size="xs" c="dimmed">
-          StarVault CCM {appVersion} · unofficial builds must self-declare
+          StarVault CCM {appVersion} · unofficial builds must self-declare ·{" "}
+          <Anchor
+            component="a"
+            href="https://discord.com/users/440833687257481227"
+            target="_blank"
+            rel="noreferrer"
+            size="xs"
+          >
+            Support on Discord
+          </Anchor>
         </Text>
       </Group>
 
