@@ -62,6 +62,12 @@ pub struct AppState {
     pub store: Arc<Store>,
     /// In-flight imports: extracted tree + cancel flag per operation.
     pub import_ops: Mutex<HashMap<String, ImportOp>>,
+    /// Parsed config; written by save_config.
+    pub config_cache: Mutex<Option<Config>>,
+    /// Campaign slots; invalidated like the library cache.
+    pub campaigns_cache: Mutex<Option<Vec<CampaignSlot>>>,
+    /// `<app-data>/config.toml`.
+    pub config_path: PathBuf,
 }
 
 /// Library scan cache; any mutation clears it so tab switches read
@@ -75,11 +81,18 @@ fn invalidate_library(cache: &tauri::State<'_, LibraryCache>) {
     *cache.entries.lock().expect("library cache poisoned") = None;
 }
 
+fn invalidate_campaigns(state: &tauri::State<'_, AppState>) {
+    *state
+        .campaigns_cache
+        .lock()
+        .expect("campaigns cache poisoned") = None;
+}
+
 /// Minimum recorded level: 0=info, 1=warn, 2=error. Set from config.
 static LOG_MIN_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
-pub fn init_log_level(app: &AppHandle) {
-    let level = Config::load(config_path(app).unwrap_or_default())
+pub fn init_log_level(config_path: &PathBuf) {
+    let level = Config::load(config_path)
         .map(|c| c.log_level)
         .unwrap_or_default();
     set_log_level(&level);
@@ -253,6 +266,7 @@ pub fn import_ingest(
 
     let _ = std::fs::remove_dir_all(&extracted_dir);
     invalidate_library(&cache);
+    invalidate_campaigns(&store_state);
     match &result {
         Ok(Some(rev)) => log_op(
             &app,
@@ -312,16 +326,20 @@ use svccm_core::config::{Config, StrategyChoice};
 use svccm_core::layout::WindowsLayout;
 use svccm_core::slots::SlotManager;
 
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("resolve app data dir: {e}"))?
-        .join("config.toml"))
+fn load_config(state: &AppState) -> Result<Config, String> {
+    let mut cached = state.config_cache.lock().expect("config cache poisoned");
+    if let Some(cfg) = cached.as_ref() {
+        return Ok(cfg.clone());
+    }
+    let cfg = Config::load(&state.config_path).map_err(|e| e.to_string())?;
+    *cached = Some(cfg.clone());
+    Ok(cfg)
 }
 
-fn load_config(app: &AppHandle) -> Result<Config, String> {
-    Config::load(config_path(app)?).map_err(|e| e.to_string())
+fn persist_config(state: &AppState, cfg: &Config) -> Result<(), String> {
+    cfg.save(&state.config_path).map_err(|e| e.to_string())?;
+    *state.config_cache.lock().expect("config cache poisoned") = Some(cfg.clone());
+    Ok(())
 }
 
 /// Game layout root derived from the configured exe (`…/StarCraft II.exe`).
@@ -344,8 +362,8 @@ pub struct ConfigDto {
 }
 
 #[tauri::command]
-pub fn get_config(app: AppHandle) -> Result<ConfigDto, String> {
-    let cfg = load_config(&app)?;
+pub fn get_config(store_state: tauri::State<'_, AppState>) -> Result<ConfigDto, String> {
+    let cfg = load_config(&store_state)?;
     Ok(ConfigDto {
         game_exe: cfg.game_exe.map(|p| p.display().to_string()),
         strategy_override: cfg.strategy_override.map(|s| match s {
@@ -359,14 +377,14 @@ pub fn get_config(app: AppHandle) -> Result<ConfigDto, String> {
 
 /// Persist settings; the game exe must exist when provided.
 #[tauri::command]
-pub fn save_config(
-    app: AppHandle,
+pub async fn save_config(
+    store_state: tauri::State<'_, AppState>,
     game_exe: Option<String>,
     strategy_override: Option<String>,
     crash_reports_opt_in: bool,
     log_level: Option<String>,
 ) -> Result<(), String> {
-    let mut cfg = load_config(&app)?;
+    let mut cfg = load_config(&store_state)?;
     cfg.game_exe = game_exe.map(PathBuf::from);
     if let Some(ref exe) = cfg.game_exe {
         // The exact file the user typed must exist — a typo in the file name
@@ -391,7 +409,7 @@ pub fn save_config(
         }
     }
     set_log_level(&cfg.log_level);
-    cfg.save(config_path(&app)?).map_err(|e| e.to_string())
+    persist_config(&store_state, &cfg)
 }
 
 /// One slot card on the Campaigns screen.
@@ -454,6 +472,10 @@ pub async fn list_campaigns(
             &format!("list_campaigns took {elapsed:?}"),
         );
     }
+    *store_state
+        .campaigns_cache
+        .lock()
+        .expect("campaigns cache poisoned") = Some(slots.clone());
     Ok(slots)
 }
 
@@ -468,7 +490,7 @@ pub async fn activate_campaign(
     id: String,
 ) -> Result<(), String> {
     let slot = slot_from_str(&slot)?;
-    let cfg = load_config(&app)?;
+    let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store.clone();
 
@@ -516,6 +538,7 @@ pub async fn activate_campaign(
         &format!("{id} → {}", slot.as_str()),
     );
     invalidate_library(&cache);
+    invalidate_campaigns(&store_state);
     Ok(())
 }
 
@@ -528,7 +551,7 @@ pub fn restore_campaign(
     slot: String,
 ) -> Result<(), String> {
     let slot = slot_from_str(&slot)?;
-    let cfg = load_config(&app)?;
+    let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store.clone();
     if let Err(e) = SlotManager::new(&layout, &store).restore(slot) {
@@ -537,6 +560,7 @@ pub fn restore_campaign(
     }
     log_op(&app, "info", "restore", slot.as_str());
     invalidate_library(&cache);
+    invalidate_campaigns(&store_state);
     Ok(())
 }
 
@@ -655,16 +679,22 @@ pub async fn reconcile(
     app: AppHandle,
     store_state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
-    let cfg = load_config(&app)?;
+    let cfg = load_config(&store_state)?;
     if cfg.game_exe.is_none() {
         return Ok(Vec::new()); // nothing to reconcile without a game install
     }
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store.clone();
-    SlotManager::new(&layout, &store)
+    let notes = SlotManager::new(&layout, &store)
         .with_strategy(cfg.strategy_override)
         .reconcile()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    for note in &notes {
+        log_op(&app, "warn", "reconcile", note);
+        // Repairs touch slots; drop cached views.
+        invalidate_campaigns(&store_state);
+    }
+    Ok(notes)
 }
 
 // --- launch (X1) -------------------------------------------------------------
@@ -674,10 +704,10 @@ use svccm_core::launch::{self, PreflightReport};
 /// Verify-only pre-flight over the configured game install.
 #[tauri::command]
 pub fn launch_preflight(
-    app: AppHandle,
+    _app: AppHandle,
     store_state: tauri::State<'_, AppState>,
 ) -> Result<PreflightReport, String> {
-    let cfg = load_config(&app)?;
+    let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store.clone();
     Ok(launch::preflight(&layout, &store))
@@ -685,8 +715,8 @@ pub fn launch_preflight(
 
 /// Detached spawn of the game executable.
 #[tauri::command]
-pub fn launch_game(app: AppHandle) -> Result<(), String> {
-    let cfg = load_config(&app)?;
+pub fn launch_game(app: AppHandle, store_state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     launch::launch(&layout)
         .map(|()| log_op(&app, "info", "launch", "game started"))
@@ -707,13 +737,16 @@ use svccm_core::library::MigrationCandidate;
 
 /// Custom campaign directories an old SC2CCM install left in Maps\Campaign.
 #[tauri::command]
-pub async fn list_migration_candidates(app: AppHandle) -> Result<Vec<MigrationCandidate>, String> {
+pub async fn list_migration_candidates(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+) -> Result<Vec<MigrationCandidate>, String> {
     // Walking candidate trees is expensive under real-time AV; only bother
     // when an old install was actually detected.
     if LegacyCcmInstall::detect(legacy_roaming_dir(&app)?).is_none() {
         return Ok(Vec::new());
     }
-    let cfg = load_config(&app)?;
+    let cfg = load_config(&store_state)?;
     if cfg.game_exe.is_none() {
         return Ok(Vec::new());
     }
@@ -745,6 +778,7 @@ pub fn migrate_candidate(
         .ok_or("migration cancelled")?;
     log_op(&app, "info", "migrate", &format!("{id} from {path}"));
     invalidate_library(&cache);
+    invalidate_campaigns(&store_state);
     Ok(rev)
 }
 
@@ -768,5 +802,6 @@ pub fn remove_package(
     store.remove_package(&id).map_err(|e| e.to_string())?;
     log_op(&app, "info", "remove", &id);
     invalidate_library(&cache);
+    invalidate_campaigns(&store_state);
     Ok(())
 }

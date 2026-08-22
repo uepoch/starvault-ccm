@@ -14,11 +14,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(commands::LibraryCache::default())
         .setup(|app| {
-            commands::init_log_level(app.handle());
-            let dir = app.path().app_data_dir()?.join("store");
+            let data_dir = app.path().app_data_dir()?;
+            commands::init_log_level(&data_dir.join("config.toml"));
             app.manage(commands::AppState {
-                store: std::sync::Arc::new(svccm_core::store::Store::open(dir)?),
+                store: std::sync::Arc::new(svccm_core::store::Store::open(data_dir.join("store"))?),
                 import_ops: Default::default(),
+                config_cache: Default::default(),
+                campaigns_cache: Default::default(),
+                config_path: data_dir.join("config.toml"),
             });
             Ok(())
         })
