@@ -114,14 +114,25 @@ pub fn saves_dir(documents: &Path, profile_id: &str) -> Option<PathBuf> {
 pub struct SavesManager {
     /// The live `…\Accounts\<acct>\<profile>\Saves` directory.
     live: PathBuf,
+    /// `…\<profile>\Banks` — campaign progress banks live beside Saves,
+    /// not inside it. For custom campaigns the bank *is* the campaign
+    /// state (the launcher map reads it for "continue"); swept with the
+    /// save-set so everything written while a campaign is active rides
+    /// with it.
+    banks: PathBuf,
     /// Store root; sets live under `<store>/saves/<slot>-<owner>/`.
     sets_root: PathBuf,
 }
 
 impl SavesManager {
     pub fn new(live_saves_dir: PathBuf, store_root: &Path) -> Self {
+        let banks = live_saves_dir
+            .parent()
+            .map(|p| p.join("Banks"))
+            .unwrap_or_else(|| live_saves_dir.join("Banks"));
         Self {
             live: live_saves_dir,
+            banks,
             sets_root: store_root.join("saves"),
         }
     }
@@ -201,32 +212,42 @@ impl SavesManager {
             std::fs::rename(&file, &dest)?;
             moved += 1;
         }
-        for dir in SWEPT_DIRS {
-            let src = self.live.join(dir);
-            if !src.is_dir() {
+        // Banks ride with the set: campaign progress (the "continue"
+        // state) lives there for custom campaigns, and everything written
+        // while this owner was active belongs to it.
+        for dir in SWEPT_DIRS.map(|d| self.live.join(d)).into_iter().chain([self.banks.clone()]) {
+            if !dir.is_dir() {
                 continue;
             }
             if !touched {
                 std::fs::create_dir_all(set_dir)?;
                 touched = true;
             }
-            let dest = set_dir.join(dir);
+            let dest = set_dir.join(dir.file_name().expect("swept dir has a name"));
             if dest.symlink_metadata().is_ok() {
                 std::fs::remove_dir_all(&dest)?;
             }
-            std::fs::rename(&src, &dest)?;
+            std::fs::rename(&dir, &dest)?;
             moved += 1;
         }
         Ok(moved)
     }
 
-    /// Copy a set's root save files and swept dirs back into live.
+    /// Copy a set's root save files and swept dirs back into live. Banks
+    /// restore beside Saves (their original home), not inside it.
     fn materialize_from(&self, set_dir: &Path) -> Result<usize> {
         let mut restored = 0;
         for entry in std::fs::read_dir(set_dir)? {
             let entry = entry?;
             let path = entry.path();
-            let dest = self.live.join(entry.file_name());
+            let name = entry.file_name();
+            let is_banks = name.eq_ignore_ascii_case("Banks");
+            let dest_root = if is_banks {
+                self.banks.parent().unwrap_or(&self.live).to_path_buf()
+            } else {
+                self.live.clone()
+            };
+            let dest = dest_root.join(&name);
             if path.is_file() {
                 std::fs::copy(&path, &dest)?;
                 restored += 1;

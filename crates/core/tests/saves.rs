@@ -63,6 +63,9 @@ fn swap_isolates_saves_between_owners_round_trip() {
     touch(&live.join("Unsaved/autosave.SC2Save"), b"auto");
     touch(&live.join("SwarmCampaignSave.SC2Save"), b"hots-stays");
     touch(&live.join("Multiplayer/1v1.SC2Save"), b"mp-stays");
+    // Campaign progress banks live beside Saves (profile dir), not inside.
+    let banks = live.parent().unwrap().join("Banks");
+    touch(&banks.join("2-S2-1-777/plain-bank.SC2Bank"), b"plain-bank");
 
     // Activate custom campaign: plain saves archived, campaign set fresh.
     mgr.swap(SlotId::LotV, "kerrigan", "plain").unwrap();
@@ -80,6 +83,7 @@ fn swap_isolates_saves_between_owners_round_trip() {
     // The game writes new progress while the campaign is live.
     touch(&live.join("VoidCampaignSave.SC2Save"), b"campaign-progress");
     touch(&live.join("Campaign/Kerrigan Mission.SC2Save"), b"km");
+    touch(&banks.join("2-S2-1-777/plain-bank.SC2Bank"), b"campaign-bank");
 
     // Restore to plain: campaign saves archived, plain ones back.
     mgr.swap(SlotId::LotV, "plain", "kerrigan").unwrap();
@@ -96,6 +100,16 @@ fn swap_isolates_saves_between_owners_round_trip() {
     assert!(store
         .join("saves/lotv-kerrigan/Campaign/Kerrigan Mission.SC2Save")
         .is_file());
+    // Banks ride with the set and come back on restore.
+    assert_eq!(
+        std::fs::read(banks.join("2-S2-1-777/plain-bank.SC2Bank")).unwrap(),
+        b"plain-bank"
+    );
+    assert_eq!(
+        std::fs::read(store.join("saves/lotv-kerrigan/Banks/2-S2-1-777/plain-bank.SC2Bank"))
+            .unwrap(),
+        b"campaign-bank"
+    );
 
     // Shared saves were never touched.
     assert_eq!(
