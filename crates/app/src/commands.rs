@@ -301,8 +301,9 @@ pub fn import_analyze(
     }
 
     let plan = plan_from_extracted(&extracted_dir).map_err(|e| e.to_string())?;
+    // File stem, not full name: "archive.zip" → "archive", not "archive-zip".
     let archive_name = zip_path
-        .file_name()
+        .file_stem()
         .map(|n| n.to_string_lossy().into_owned());
     let preview = preview_plan(&plan, archive_name.as_deref());
     store_state
