@@ -185,7 +185,7 @@ export default function Settings() {
                 label="Log level"
                 description="Minimum severity kept in the operation log."
                 data={[
-                  { value: "info", label: "Info — everything" },
+                  { value: "info", label: "Info" },
                   { value: "warn", label: "Warnings and errors" },
                   { value: "error", label: "Errors only" },
                 ]}
