@@ -9,27 +9,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      # Tauri shell (svccm-app) needs the WebKitGTK stack to compile.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
-      - run: cargo fmt --check --all
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-
+  # Single Rust platform: Windows is the only shipping target (SC2 is
+  # Windows/macOS only). Re-add a macos job mirroring `windows` when the
+  # macOS build lands.
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check --all
       - run: cargo clippy --all-targets -- -D warnings

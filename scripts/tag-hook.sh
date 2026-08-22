@@ -3,8 +3,8 @@
 # Releases without changelog entries are silently-broken releases.
 tag="$1"
 case "$tag" in
-  v*) ;;
-  *) exit 0 ;; # non-release tags are unconstrained
+v*) ;;
+*) exit 0 ;; # non-release tags are unconstrained
 esac
 if ! grep -q "## \[${tag#v}\]" CHANGELOG.md 2>/dev/null; then
   echo "error: CHANGELOG.md has no '## [${tag#v}]' entry." >&2

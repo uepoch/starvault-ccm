@@ -9,7 +9,21 @@ permissions:
   contents: write
 
 jobs:
+  # Early gate: no build starts unless the tag has a changelog entry.
+  changelog-required:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check CHANGELOG.md has an entry for this tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! grep -q "## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${version}]' entry. Add it and re-tag." 
+            exit 1
+          fi
+
   build-windows:
+    needs: changelog-required
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
