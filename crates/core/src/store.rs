@@ -368,16 +368,11 @@ impl Store {
             let target = mods_dir.join(&entry.rel_path);
             if let Some(parent) = target.parent() {
                 // A leftover packed .SC2Mod FILE where this package ships an
-                // unpacked directory tree: remove the file so the dirs can be
-                // created. The union is the source of truth for what is active.
-                if parent
-                    .symlink_metadata()
-                    .map(|m| !m.is_dir())
-                    .unwrap_or(false)
-                {
-                    std::fs::remove_file(parent)
-                        .map_err(|e| pkg_err(parent.display().to_string(), e.to_string()))?;
-                }
+                // unpacked tree: remove the file so the dirs can be created.
+                // Every ANCESTOR must be checked, not just the immediate
+                // parent - the deep files sort before the shallow ones, so
+                // create_dir_all hits the blocking file through intermediates.
+                clear_file_ancestors(parent)?;
                 std::fs::create_dir_all(parent)?;
             }
             let src = self.blob_path(&entry.file.sha256);
@@ -448,6 +443,33 @@ fn copy_with_retry(src: &Path, dest: &Path) -> Result<()> {
     Err(last
         .map(|e| pkg_err(dest.display().to_string(), e.to_string()))
         .unwrap_or_else(|| pkg_err(dest.display().to_string(), "copy failed")))
+}
+
+/// Walk from `mods_dir` down to `dir` and remove any FILE that occupies a
+/// directory step (leftover packed containers). Stops at `mods_dir`.
+fn clear_file_ancestors(dir: &Path) -> Result<()> {
+    // Collect the component chain below the mods root, then check from the
+    // top: the highest blocking file must go first.
+    let mut chain = Vec::new();
+    let mut cur = dir;
+    while let Some(parent) = cur.parent() {
+        chain.push(cur);
+        cur = parent;
+        if chain.len() > 16 {
+            return Ok(()); // absurd depth; let create_dir_all surface it
+        }
+    }
+    for step in chain.iter().rev() {
+        if step
+            .symlink_metadata()
+            .map(|m| !m.is_dir())
+            .unwrap_or(false)
+        {
+            std::fs::remove_file(step)
+                .map_err(|e| pkg_err(step.display().to_string(), e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 fn sorted_dirs(dir: &Path) -> Result<Vec<String>> {
