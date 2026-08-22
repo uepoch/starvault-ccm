@@ -124,7 +124,7 @@ fn union_replaces_leftover_packed_mod_file_with_directory_form() {
     // package ships an unpacked directory tree. The union must replace the
     // stale form instead of failing with os error 183.
     use svccm_core::layout::SlotId;
-    use svccm_core::store::{ModsUnionEntry, Store};
+    use svccm_core::store::Store;
 
     let tmp = tempfile::tempdir().unwrap();
     let store = Store::open(tmp.path().join("store")).unwrap();
