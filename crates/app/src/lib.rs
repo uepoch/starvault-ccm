@@ -8,6 +8,34 @@ mod commands;
 mod telemetry;
 
 use tauri::Manager;
+use tauri_plugin_updater::UpdaterExt;
+
+/// Transparent self-update: check once at startup, and if a newer release
+/// exists, download and install it in the background (passive NSIS UI). The
+/// new version takes effect on the next launch - never mid-session. Every
+/// outcome is logged; failures stay invisible to the user.
+fn spawn_update_check(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let Ok(updater) = app.updater() else {
+            return;
+        };
+        let Ok(Some(update)) = updater.check().await else {
+            return;
+        };
+        let version = update.version.clone();
+        let level = match update
+            .download_and_install(|_chunk, _total| {}, || {})
+            .await
+        {
+            Ok(()) => (
+                "info",
+                format!("installed {version}, active on next launch"),
+            ),
+            Err(e) => ("warn", format!("install of {version} failed: {e}")),
+        };
+        commands::log_op(&app, level.0, "update", &level.1);
+    });
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -34,6 +62,7 @@ pub fn run() {
             commands::log_startup(app.handle());
             commands::spawn_refresh(app.handle());
             telemetry::init(app.handle());
+            spawn_update_check(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -57,7 +86,6 @@ pub fn run() {
             commands::get_saves_status,
             commands::remove_package,
             commands::edit_package_metadata,
-            commands::restart_app,
             commands::edit_package_metadata,
             commands::launch_preflight,
             commands::launch_game,

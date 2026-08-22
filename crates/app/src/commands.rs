@@ -858,7 +858,7 @@ fn rotate_log_if_needed(path: &PathBuf) {
     let _ = std::fs::rename(path, path.with_extension("jsonl.1"));
 }
 
-fn log_op(app: &AppHandle, level: &str, kind: &str, detail: &str) {
+pub(crate) fn log_op(app: &AppHandle, level: &str, kind: &str, detail: &str) {
     let rank = match level {
         "warn" => 1,
         "error" => 2,
@@ -1210,12 +1210,6 @@ pub fn edit_package_metadata(
 }
 
 // --- updater -----------------------------------------------------------------
-
-/// Restart the app after an update has been installed.
-#[tauri::command]
-pub fn restart_app(app: AppHandle) {
-    app.restart();
-}
 
 // --- changelog ---------------------------------------------------------------
 

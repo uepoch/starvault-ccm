@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { check, type Update } from "@tauri-apps/plugin-updater";
-import { Alert, Box, Button, Group, MantineProvider, createTheme, Tabs } from "@mantine/core";
+import { Box, MantineProvider, createTheme, Tabs } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
@@ -26,31 +25,6 @@ interface ConfigDto {
 export default function App() {
   const [tab, setTab] = useState<string | null>(null);
   const [pendingZip, setPendingZip] = useState<string | null>(null);
-  const [update, setUpdate] = useState<Update | null>(null);
-  const [updating, setUpdating] = useState(false);
-
-  useEffect(() => {
-    // Passive update check: silent on failure and when already current.
-    check()
-      .then((u) => u && setUpdate(u))
-      .catch(() => {});
-  }, []);
-
-  const installUpdate = async () => {
-    if (!update) return;
-    setUpdating(true);
-    try {
-      await update.downloadAndInstall();
-      await invoke("restart_app");
-    } catch {
-      notifications.show({
-        color: "red",
-        title: "Update failed",
-        message: "Download failed — try again later.",
-      });
-      setUpdating(false);
-    }
-  };
 
   useEffect(() => {
     // Crash recovery, then first-run install detection.
@@ -108,22 +82,6 @@ export default function App() {
             <ChangelogButton />
           </Box>
         </Tabs.List>
-
-        {update && (
-          <Group px="lg" pt="xs">
-            <Alert
-              withCloseButton
-              onClose={() => setUpdate(null)}
-              color="blue"
-              flex={1}
-              title={`StarVault CCM ${update.version} available`}
-            >
-              <Button size="xs" loading={updating} onClick={installUpdate}>
-                Install and restart
-              </Button>
-            </Alert>
-          </Group>
-        )}
 
         <Tabs.Panel value="library">
           <Library pendingZip={pendingZip} onZipConsumed={() => setPendingZip(null)} />
