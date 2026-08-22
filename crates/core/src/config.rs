@@ -22,6 +22,10 @@ pub struct Config {
     pub crash_reports_opt_in: bool,
     /// Minimum operation-log level recorded: `info`, `warn`, or `error`.
     pub log_level: String,
+    /// Experimental: isolate campaign saves per active package.
+    pub save_isolation: bool,
+    /// Persisted saves profile `<account>/<profile>` when isolation is on.
+    pub saves_profile: Option<String>,
 }
 
 impl Default for Config {
@@ -31,6 +35,8 @@ impl Default for Config {
             strategy_override: None,
             crash_reports_opt_in: false,
             log_level: "info".into(),
+            save_isolation: false,
+            saves_profile: None,
         }
     }
 }

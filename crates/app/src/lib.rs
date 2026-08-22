@@ -52,6 +52,7 @@ pub fn run() {
             commands::discover_game_exe,
             commands::reveal_package,
             commands::changelog,
+            commands::get_saves_status,
             commands::remove_package,
             commands::launch_preflight,
             commands::launch_game,

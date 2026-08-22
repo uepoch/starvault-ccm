@@ -22,6 +22,16 @@ interface ConfigDto {
   strategy_override: string | null;
   crash_reports_opt_in: boolean;
   log_level: string;
+  save_isolation: boolean;
+  saves_profile: string | null;
+}
+
+interface SavesStatus {
+  supported: boolean;
+  reason: string | null;
+  profiles: string[];
+  selected: string | null;
+  enabled: boolean;
 }
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -31,8 +41,11 @@ export default function Settings() {
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
   const [logLevel, setLogLevel] = useState("info");
+  const [saveIsolation, setSaveIsolation] = useState(false);
+  const [savesProfile, setSavesProfile] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [appVersion, setAppVersion] = useState("");
+  const [savesStatus, setSavesStatus] = useState<SavesStatus | null>(null);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Skip the auto-save effect until the initial load has populated state.
@@ -42,12 +55,17 @@ export default function Settings() {
     getVersion()
       .then(setAppVersion)
       .catch(() => setAppVersion(""));
+    invoke<SavesStatus>("get_saves_status")
+      .then(setSavesStatus)
+      .catch(() => {});
     invoke<ConfigDto>("get_config")
       .then((cfg) => {
         setGameExe(cfg.game_exe ?? "");
         setStrategy(cfg.strategy_override ?? "auto");
         setCrashReports(cfg.crash_reports_opt_in);
         setLogLevel(cfg.log_level ?? "info");
+        setSaveIsolation(cfg.save_isolation);
+        setSavesProfile(cfg.saves_profile);
         loadedRef.current = true;
       })
       .catch((e) => notifications.show({ color: "red", title: "Load failed", message: String(e) }));
@@ -64,6 +82,7 @@ export default function Settings() {
           strategyOverride: strategy === "auto" ? null : strategy,
           crashReportsOptIn: crashReports,
           logLevel,
+          extras: { saveIsolation, savesProfile },
         });
         setStatus("saved");
         setErrorMsg(null);
@@ -75,7 +94,7 @@ export default function Settings() {
       }
     }, 700);
     return () => clearTimeout(t);
-  }, [gameExe, strategy, crashReports, logLevel]);
+  }, [gameExe, strategy, crashReports, logLevel, saveIsolation, savesProfile]);
 
   const browse = async () => {
     const selected = await open({
@@ -169,6 +188,25 @@ export default function Settings() {
                 value={logLevel}
                 onChange={(v) => setLogLevel(v ?? "info")}
               />
+              <Switch
+                label="Save isolation (experimental)"
+                description={
+                  savesStatus?.reason ??
+                  "Each campaign keeps its own saves; switching never strands progress."
+                }
+                disabled={savesStatus ? !savesStatus.supported : true}
+                checked={saveIsolation}
+                onChange={(e) => setSaveIsolation(e.currentTarget.checked)}
+              />
+              {savesStatus && savesStatus.supported && savesStatus.profiles.length > 1 && (
+                <Select
+                  label="Saves profile"
+                  description="Multiple Battle.net accounts found — pick which saves to isolate."
+                  data={savesStatus.profiles.map((p) => ({ value: p, label: p }))}
+                  value={savesProfile}
+                  onChange={setSavesProfile}
+                />
+              )}
             </Stack>
           </Accordion.Panel>
         </Accordion.Item>

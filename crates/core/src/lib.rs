@@ -14,6 +14,7 @@ pub mod library;
 pub mod mpq;
 pub mod package;
 pub mod report;
+pub mod saves;
 pub mod slots;
 pub mod store;
 

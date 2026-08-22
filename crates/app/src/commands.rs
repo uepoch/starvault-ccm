@@ -503,6 +503,8 @@ pub struct ConfigDto {
     pub strategy_override: Option<String>,
     pub crash_reports_opt_in: bool,
     pub log_level: String,
+    pub save_isolation: bool,
+    pub saves_profile: Option<String>,
 }
 
 #[tauri::command]
@@ -516,19 +518,43 @@ pub fn get_config(store_state: tauri::State<'_, AppState>) -> Result<ConfigDto, 
         }),
         crash_reports_opt_in: cfg.crash_reports_opt_in,
         log_level: cfg.log_level.clone(),
+        save_isolation: cfg.save_isolation,
+        saves_profile: cfg.saves_profile.clone(),
     })
+}
+
+/// Save-isolation settings appended to save_config (keeps the arg count
+/// under clippy's limit).
+#[derive(serde::Deserialize, Default)]
+pub struct ConfigExtras {
+    pub save_isolation: Option<bool>,
+    pub saves_profile: Option<String>,
 }
 
 /// Persist settings; the game exe must exist when provided.
 #[tauri::command]
+
 pub async fn save_config(
     store_state: tauri::State<'_, AppState>,
     game_exe: Option<String>,
     strategy_override: Option<String>,
     crash_reports_opt_in: bool,
     log_level: Option<String>,
+    extras: Option<ConfigExtras>,
 ) -> Result<(), String> {
     let mut cfg = load_config(&store_state)?;
+    if let Some(extras) = extras {
+        if let Some(on) = extras.save_isolation {
+            cfg.save_isolation = on;
+        }
+        if let Some(profile) = extras.saves_profile {
+            cfg.saves_profile = if profile.is_empty() {
+                None
+            } else {
+                Some(profile)
+            };
+        }
+    }
     cfg.game_exe = game_exe.map(PathBuf::from);
     if let Some(ref exe) = cfg.game_exe {
         // The exact file the user typed must exist — a typo in the file name
@@ -677,6 +703,9 @@ pub async fn activate_campaign(
         )));
     }
 
+    // Save-set owner before this switch; captured before any mutation.
+    let prev_save_owner = save_owner(&store, slot);
+
     // M5 pre-check with structured detail for the conflict dialog. The
     // authoritative block still happens inside `activate`.
     let mut would_deploy: Vec<PackageManifest> = Vec::new();
@@ -738,6 +767,7 @@ pub async fn activate_campaign(
         );
         return Err(CommandError::from(e.to_string()));
     }
+    swap_saves(&app, &store, &cfg, slot, &id, &prev_save_owner);
     log_op(
         &app,
         "info",
@@ -761,10 +791,12 @@ pub fn restore_campaign(
     let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store()?;
+    let prev_save_owner = save_owner(&store, slot);
     if let Err(e) = SlotManager::new(&layout, &store).restore(slot) {
         log_op(&app, "error", "restore", &format!("{}: {e}", slot.as_str()));
         return Err(e.to_string());
     }
+    swap_saves(&app, &store, &cfg, slot, "plain", &prev_save_owner);
     log_op(&app, "info", "restore", slot.as_str());
     invalidate_library(&cache);
     invalidate_campaigns(&store_state);
@@ -974,8 +1006,10 @@ pub async fn launch_package(
     let slot = slot_from_str(&candidate.slot)?;
 
     let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
-    for (active_slot, _, _) in store.active_slots().map_err(CommandError::from)? {
+    let mut prev_owners = Vec::new();
+    for (active_slot, active_id, _) in store.active_slots().map_err(CommandError::from)? {
         let s = slot_from_str(&active_slot)?;
+        prev_owners.push((s, active_id));
         manager
             .restore(s)
             .map_err(|e| CommandError::from(e.to_string()))?;
@@ -983,6 +1017,15 @@ pub async fn launch_package(
     manager
         .activate(slot, &id, rev)
         .map_err(|e| CommandError::from(e.to_string()))?;
+    for (s, prev) in &prev_owners {
+        swap_saves(&app, &store, &cfg, *s, "plain", prev);
+    }
+    let prev_owner = prev_owners
+        .iter()
+        .find(|(s, _)| *s == slot)
+        .map(|(_, o)| o.clone())
+        .unwrap_or_else(|| "plain".into());
+    swap_saves(&app, &store, &cfg, slot, &id, &prev_owner);
     launch::launch(&layout).map_err(|e| CommandError::from(e.to_string()))?;
 
     log_op(
@@ -1119,6 +1162,19 @@ pub fn remove_package(
 ) -> Result<(), String> {
     let store = store_state.store()?;
     store.remove_package(&id).map_err(|e| e.to_string())?;
+    // Save sets belong to the package; reclaim them with it.
+    if let Some(live) = live_saves(&app, &load_config(&store_state)?).ok().flatten() {
+        let mgr = SavesManager::new(live, store.root());
+        let removed = mgr.remove_sets(&id);
+        if removed > 0 {
+            log_op(
+                &app,
+                "info",
+                "saves",
+                &format!("removed {removed} save set(s) of {id}"),
+            );
+        }
+    }
     log_op(&app, "info", "remove", &id);
     invalidate_library(&cache);
     invalidate_campaigns(&store_state);
@@ -1131,4 +1187,122 @@ pub fn remove_package(
 #[tauri::command]
 pub fn changelog() -> String {
     include_str!("../../../CHANGELOG.md").to_string()
+}
+
+// --- save isolation ----------------------------------------------------------
+
+use svccm_core::saves::{discover, saves_dir as resolve_saves_dir, SavesManager};
+
+#[derive(serde::Serialize)]
+pub struct SavesStatus {
+    pub supported: bool,
+    pub reason: Option<String>,
+    /// Discovered profiles as `<account>/<profile>`.
+    pub profiles: Vec<String>,
+    pub selected: Option<String>,
+    pub enabled: bool,
+}
+
+fn documents_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .document_dir()
+        .map_err(|e| format!("resolve Documents: {e}"))
+}
+
+/// Resolve the live Saves dir for the configured profile.
+fn live_saves(app: &AppHandle, cfg: &Config) -> Result<Option<PathBuf>, String> {
+    let docs = documents_dir(app)?;
+    if svccm_core::saves::is_onedrive(&docs) {
+        // Hard stop even if a stale profile was persisted before the check
+        // existed: never swap inside an OneDrive-managed tree.
+        return Ok(None);
+    }
+    let single_profile = {
+        let mut found = discover(&docs).into_iter();
+        match (found.next(), found.next()) {
+            (Some(only), None) => Some(only.id),
+            _ => None,
+        }
+    };
+    let profile = cfg.saves_profile.clone().or(single_profile);
+    Ok(profile.as_deref().and_then(|p| resolve_saves_dir(&docs, p)))
+}
+
+/// Saves tab state for Settings: support check, profiles, current choice.
+#[tauri::command]
+pub async fn get_saves_status(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+) -> Result<SavesStatus, String> {
+    let cfg = load_config(&store_state)?;
+    let docs = documents_dir(&app)?;
+    if svccm_core::saves::is_onedrive(&docs) {
+        return Ok(SavesStatus {
+            supported: false,
+            reason: Some(
+                "Documents is OneDrive-managed — save isolation is not supported there yet.".into(),
+            ),
+            profiles: Vec::new(),
+            selected: cfg.saves_profile.clone(),
+            enabled: cfg.save_isolation,
+        });
+    }
+    let profiles: Vec<String> = discover(&docs).into_iter().map(|p| p.id).collect();
+    // Exactly one profile and none persisted: default to it so isolation
+    // works without a picker (the common single-account case).
+    let selected = match (&cfg.saves_profile, profiles.len()) {
+        (None, 1) => profiles.first().cloned(),
+        (selected, _) => selected.clone(),
+    };
+    Ok(SavesStatus {
+        supported: !profiles.is_empty(),
+        reason: if profiles.is_empty() {
+            Some("No StarCraft II save profile found (launch the game once first).".into())
+        } else {
+            None
+        },
+        profiles,
+        selected,
+        enabled: cfg.save_isolation,
+    })
+}
+
+/// Swap a faction's save-set after a slot change. Best-effort: failures are
+/// logged and surfaced, but never block the campaign switch itself.
+fn swap_saves(
+    app: &AppHandle,
+    store: &svccm_core::store::Store,
+    cfg: &Config,
+    slot: SlotId,
+    new_owner: &str,
+    prev_owner: &str,
+) {
+    if !cfg.save_isolation {
+        return;
+    }
+    let Some(live) = live_saves(app, cfg).ok().flatten() else {
+        return;
+    };
+    let mgr = SavesManager::new(live, store.root());
+    match mgr.swap(slot, new_owner, prev_owner) {
+        Ok(notes) => {
+            for note in notes {
+                log_op(app, "info", "saves", &note);
+            }
+        }
+        Err(e) => log_op(app, "error", "saves", &format!("{slot:?} swap: {e}")),
+    }
+}
+
+/// The current save-set owner for a slot: its active package, or "plain".
+fn save_owner(store: &svccm_core::store::Store, slot: SlotId) -> String {
+    store
+        .active_slots()
+        .ok()
+        .and_then(|rows| {
+            rows.into_iter()
+                .find(|(s, _, _)| s == slot.as_str())
+                .map(|(_, id, _)| id)
+        })
+        .unwrap_or_else(|| "plain".into())
 }
