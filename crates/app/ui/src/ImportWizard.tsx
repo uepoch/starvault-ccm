@@ -4,7 +4,6 @@ import { listen } from "@tauri-apps/api/event";
 import { notifications } from "@mantine/notifications";
 import {
   Alert,
-  Badge,
   Button,
   Collapse,
   Group,
@@ -264,24 +263,12 @@ export default function ImportWizard({
                 maxRows={4}
               />
               <div>
-                {preview.matched_pattern && (
-                  <Text size="xs" c="dimmed" mb={4}>
-                    detected via "{preview.matched_pattern}"
-                  </Text>
-                )}
-                {preview.slot_guess !== "unknown" ? (
-                  <Badge size="lg" variant="light">
-                    {SLOTS.find((s) => s.value === preview.slot_guess)?.label}
-                  </Badge>
-                ) : (
-                  <>
-                    <Text size="xs" c="dimmed" mb={4}>
-                      No detection possible — pick the faction this package was built for; it will
-                      load via that campaign's menu.
-                    </Text>
-                    <SegmentedControl data={SLOTS} value={slot} onChange={setSlot} />
-                  </>
-                )}
+                <Text size="sm" fw={500} mb={4}>
+                  Faction
+                  {preview.slot_guess === "unknown" &&
+                    " — nothing detected, pick the one this was built for"}
+                </Text>
+                <SegmentedControl data={SLOTS} value={slot} onChange={setSlot} />
               </div>
               <Group>
                 <Button disabled={!id || !slot} onClick={startIngest}>
