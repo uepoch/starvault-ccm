@@ -470,7 +470,7 @@ use svccm_core::config::{Config, StrategyChoice};
 use svccm_core::layout::WindowsLayout;
 use svccm_core::slots::SlotManager;
 
-fn load_config(state: &AppState) -> Result<Config, String> {
+pub fn load_config(state: &AppState) -> Result<Config, String> {
     let mut cached = state.config_cache.lock().expect("config cache poisoned");
     if let Some(cfg) = cached.as_ref() {
         return Ok(cfg.clone());
@@ -553,6 +553,7 @@ pub async fn save_config(
         }
     }
     set_log_level(&cfg.log_level);
+    crate::telemetry::set_enabled(cfg.crash_reports_opt_in);
     persist_config(&store_state, &cfg)
 }
 
@@ -826,6 +827,11 @@ fn log_op(app: &AppHandle, level: &str, kind: &str, detail: &str) {
     };
     if rank < LOG_MIN_LEVEL.load(std::sync::atomic::Ordering::Relaxed) {
         return;
+    }
+    // Opt-in telemetry: every surfaced failure is captured (S3: as much
+    // signal as the user allowed us to collect).
+    if rank == 2 {
+        crate::telemetry::capture(detail);
     }
     let entry = LogEntry {
         // ponytail: second-resolution UTC stamp from std only; chrono when the

@@ -5,6 +5,7 @@
 //! M3 reconciliation work (roadmap).
 
 mod commands;
+mod telemetry;
 
 use tauri::Manager;
 
@@ -30,6 +31,7 @@ pub fn run() {
             // obvious when diagnosing reports.
             commands::log_startup(app.handle());
             commands::spawn_refresh(app.handle());
+            telemetry::init(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
