@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { MantineProvider, createTheme, Tabs } from "@mantine/core";
+import { Box, MantineProvider, createTheme, Tabs } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import Campaigns from "./Campaigns";
+import ChangelogButton from "./ChangelogButton";
 import Library from "./Library";
 import Log from "./Log";
 import Settings from "./Settings";
@@ -77,6 +78,9 @@ export default function App() {
           <Tabs.Tab value="campaigns">Campaigns</Tabs.Tab>
           <Tabs.Tab value="log">Log</Tabs.Tab>
           <Tabs.Tab value="settings">Settings</Tabs.Tab>
+          <Box ml="auto">
+            <ChangelogButton />
+          </Box>
         </Tabs.List>
 
         <Tabs.Panel value="library">

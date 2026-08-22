@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
@@ -31,13 +32,16 @@ export default function Settings() {
   const [crashReports, setCrashReports] = useState(false);
   const [logLevel, setLogLevel] = useState("info");
   const [confirmClear, setConfirmClear] = useState(false);
-  const [changelog, setChangelog] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState("");
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Skip the auto-save effect until the initial load has populated state.
   const loadedRef = useRef(false);
 
   useEffect(() => {
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
     invoke<ConfigDto>("get_config")
       .then((cfg) => {
         setGameExe(cfg.game_exe ?? "");
@@ -170,21 +174,6 @@ export default function Settings() {
         </Accordion.Item>
       </Accordion>
 
-      <Group justify="flex-end">
-        <Text size="xs" c="dimmed">
-          StarVault CCM 0.1.0 · unofficial builds must self-declare
-        </Text>
-        <Button
-          variant="subtle"
-          size="xs"
-          onClick={async () => {
-            setChangelog(await invoke<string>("changelog"));
-          }}
-        >
-          Changelog
-        </Button>
-      </Group>
-
       <Card withBorder color="red">
         <Stack gap="sm">
           <Text fw={500}>Danger zone</Text>
@@ -198,16 +187,11 @@ export default function Settings() {
         </Stack>
       </Card>
 
-      <Modal
-        opened={changelog !== null}
-        onClose={() => setChangelog(null)}
-        title="Changelog"
-        size="lg"
-      >
-        <Text size="sm" ff="monospace" style={{ whiteSpace: "pre-wrap" }}>
-          {changelog}
+      <Group justify="flex-end">
+        <Text size="xs" c="dimmed">
+          StarVault CCM {appVersion} · unofficial builds must self-declare
         </Text>
-      </Modal>
+      </Group>
 
       <Modal
         opened={confirmClear}
