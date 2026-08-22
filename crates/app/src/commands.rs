@@ -1124,3 +1124,11 @@ pub fn remove_package(
     invalidate_campaigns(&store_state);
     Ok(())
 }
+
+// --- changelog ---------------------------------------------------------------
+
+/// The changelog embedded at build time (crates/app/../../CHANGELOG.md).
+#[tauri::command]
+pub fn changelog() -> String {
+    include_str!("../../../CHANGELOG.md").to_string()
+}

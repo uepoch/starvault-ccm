@@ -31,6 +31,7 @@ export default function Settings() {
   const [crashReports, setCrashReports] = useState(false);
   const [logLevel, setLogLevel] = useState("info");
   const [confirmClear, setConfirmClear] = useState(false);
+  const [changelog, setChangelog] = useState<string | null>(null);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Skip the auto-save effect until the initial load has populated state.
@@ -173,6 +174,15 @@ export default function Settings() {
         <Text size="xs" c="dimmed">
           StarVault CCM 0.1.0 · unofficial builds must self-declare
         </Text>
+        <Button
+          variant="subtle"
+          size="xs"
+          onClick={async () => {
+            setChangelog(await invoke<string>("changelog"));
+          }}
+        >
+          Changelog
+        </Button>
       </Group>
 
       <Card withBorder color="red">
@@ -187,6 +197,17 @@ export default function Settings() {
           </Button>
         </Stack>
       </Card>
+
+      <Modal
+        opened={changelog !== null}
+        onClose={() => setChangelog(null)}
+        title="Changelog"
+        size="lg"
+      >
+        <Text size="sm" ff="monospace" style={{ whiteSpace: "pre-wrap" }}>
+          {changelog}
+        </Text>
+      </Modal>
 
       <Modal
         opened={confirmClear}

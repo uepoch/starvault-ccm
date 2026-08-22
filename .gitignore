@@ -6,12 +6,15 @@ crates/*/target/
 node_modules/
 webui/dist/
 
-# Reference material and large local fixtures — never commit
+# Reference material and large local artifacts — never commit
 /old-reference/
 *.zip
 *.MPQ
 *.SC2Mod
 *.SC2Map
+# ...except the reduced test fixtures, which CI needs
+!crates/core/tests/fixtures/*.SC2Mod
+!crates/core/tests/fixtures/*.SC2Map
 
 # Local config
 .DS_Store
