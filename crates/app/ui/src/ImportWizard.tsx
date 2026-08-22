@@ -266,11 +266,8 @@ export default function ImportWizard({
               <div>
                 <Text size="sm" fw={500} mb={4}>
                   Faction
-                  {preview.slot_guess === "unknown"
-                    ? " — nothing detected, pick the one this was built for"
-                    : preview.matched_pattern
-                      ? ` — detected via “${preview.matched_pattern}”`
-                      : ""}
+                  {preview.slot_guess === "unknown" &&
+                    " — nothing detected, pick the one this was built for"}
                 </Text>
                 <Group gap="xs">
                   {SLOTS.map((f) => (
