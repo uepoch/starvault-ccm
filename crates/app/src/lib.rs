@@ -36,6 +36,14 @@ fn spawn_update_check(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Tracing → Sentry bridge: spans (operation, pkg, slot, archive) become
+    // Sentry spans on the scope, so crashes and captured errors carry the
+    // surrounding context. No-op while telemetry is off.
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    tracing_subscriber::registry()
+        .with(sentry_tracing::layer().enable_span_attributes())
+        .init();
+
     tauri::Builder::default()
         // Must be the FIRST plugin: a second app instance exits here and
         // focuses the existing window instead.

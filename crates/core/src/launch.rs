@@ -271,6 +271,7 @@ fn battlenet_running() -> bool {
 /// SC2 at boot ("an error occurred starting StarCraft II").
 const GAME_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(6);
 
+#[tracing::instrument(skip_all)]
 pub fn launch(layout: &WindowsLayout) -> Result<()> {
     let exe = layout.exe();
     if !exe.is_file() {

@@ -136,6 +136,7 @@ impl Store {
     /// Like [`Store::ingest`], reporting per-file progress. The callback
     /// runs before each file; returning `false` cancels at that boundary
     /// and yields `Ok(None)` — partial blobs are orphans reclaimed by GC.
+    #[tracing::instrument(skip_all, fields(pkg = id, slot = slot.as_str()))]
     pub fn ingest_with_progress(
         &self,
         id: &str,

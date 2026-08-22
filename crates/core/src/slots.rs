@@ -47,6 +47,7 @@ impl<'a> SlotManager<'a> {
     ///
     /// Also deploys the union of `mods/**` for all would-be-active packages;
     /// a genuine cross-slot conflict aborts before anything is touched (M5).
+    #[tracing::instrument(skip_all, fields(slot = slot.as_str(), pkg = id, rev = rev))]
     pub fn activate(&self, slot: SlotId, id: &str, rev: &str) -> Result<()> {
         let manifest = self.store.load_manifest(id, rev)?;
 
@@ -105,6 +106,7 @@ impl<'a> SlotManager<'a> {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(pkg = manifest.id))]
     fn swap(&self, slot: SlotId, manifest: &PackageManifest, backup: &Path) -> Result<()> {
         if self.wants_junction(slot) {
             match self.swap_junction(slot, manifest, backup) {
@@ -212,6 +214,7 @@ impl<'a> SlotManager<'a> {
     }
 
     /// Return a slot to its plain Blizzard state.
+    #[tracing::instrument(skip_all, fields(slot = slot.as_str()))]
     pub fn restore(&self, slot: SlotId) -> Result<()> {
         let slot_dir = self.layout.slot_dir(slot);
         if slot == SlotId::Wol {

@@ -265,6 +265,7 @@ fn slot_from_str(slot: &str) -> Result<SlotId, String> {
 /// Analyze a package archive: extract to a scratch dir and preview what an
 /// import would do. Emits `import-progress` events for the extract phase.
 #[tauri::command]
+#[tracing::instrument(skip_all, fields(archive = %path))]
 pub fn import_analyze(
     app: AppHandle,
     store_state: tauri::State<'_, AppState>,
@@ -327,6 +328,7 @@ pub fn import_analyze(
 /// phase; honours [`import_cancel`]. Returns the new revision, or `None` when
 /// cancelled.
 #[tauri::command]
+#[tracing::instrument(skip_all, fields(pkg = %id, slot = %slot))]
 pub fn import_ingest(
     app: AppHandle,
     store_state: tauri::State<'_, AppState>,
@@ -673,6 +675,7 @@ fn list_campaigns_inner(
 /// Activate an installed package on a slot (K3: replaces whatever is there).
 /// Cross-slot conflicts abort untouched; the error names both packages.
 #[tauri::command]
+#[tracing::instrument(skip_all, fields(pkg = %id, slot = %slot))]
 pub async fn activate_campaign(
     app: AppHandle,
     store_state: tauri::State<'_, AppState>,

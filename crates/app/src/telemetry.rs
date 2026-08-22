@@ -30,7 +30,10 @@ pub fn init(app: &AppHandle) {
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::Relaxed);
     if on {
-        let _guard = sentry::init((DSN, sentry::ClientOptions::default()));
+        let _guard = sentry::init((
+            DSN,
+            sentry::ClientOptions::default().traces_sample_rate(1.0),
+        ));
         // The guard would shut the client down on drop; leak it to keep the
         // client alive for the process lifetime.
         std::mem::forget(_guard);
