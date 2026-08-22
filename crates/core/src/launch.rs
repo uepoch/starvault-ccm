@@ -83,13 +83,17 @@ fn check_slot_tree(
 
     if let Ok(meta) = std::fs::symlink_metadata(&slot_dir) {
         if meta.file_type().is_symlink() {
-            match std::fs::read_link(&slot_dir) {
-                Ok(target) if target.exists() => return, // junction intact
-                _ => {
-                    drift.push(format!("{}: junction dangling", slot.as_str()));
-                    return;
-                }
+            let Ok(target) = std::fs::read_link(&slot_dir) else {
+                drift.push(format!("{}: junction dangling", slot.as_str()));
+                return;
+            };
+            if !target.exists() {
+                drift.push(format!("{}: junction dangling", slot.as_str()));
+                return;
             }
+            // Junction resolves; fall through to the file-count check — the
+            // target existing does not mean its content is intact (it can
+            // be damaged through the link).
         }
     }
 
