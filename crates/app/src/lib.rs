@@ -27,10 +27,7 @@ fn spawn_update_check(app: tauri::AppHandle) {
             .download_and_install(|_chunk, _total| {}, || {})
             .await
         {
-            Ok(()) => (
-                "info",
-                format!("installed {version}, active on next launch"),
-            ),
+            Ok(()) => ("info", format!("updated to {version} - restarting")),
             Err(e) => ("warn", format!("install of {version} failed: {e}")),
         };
         commands::log_op(&app, level.0, "update", &level.1);
