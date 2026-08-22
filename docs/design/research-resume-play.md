@@ -86,3 +86,22 @@ external process. Only `--exec` delegation gives us authenticated launches.
 a few seconds; launching inside that window crashes the game at boot with
 "an error occurred starting StarCraft II". Wait for the process to exit,
 then ~6s more, before delegating.
+
+**Resume-into-save: definitively impossible from an external process.**
+Exhaustive live matrix (2026-08-22, Base97563): `-run <save>`, `-runsave`,
+`-portal`, `-sso 0`, offline/guest flags — every form either dies at the
+legacy login or gets stripped. The smoking gun is in the game's own
+SystemInfo logs: launching with `-sso=1 -uid s2 -run <save>` makes SC2
+re-execute itself 3 seconds later with a BARE save path and no auth flags —
+the `-launch` path intentionally re-spawns "clean", consuming but not
+forwarding our arguments, and the re-spawned instance has no session token.
+
+The token itself is minted per-launch inside Battle.net's process and handed
+to the game over private IPC at spawn time (registry shows only
+`ACCOUNT=(hidden) ACCOUNT_TS=...`). It never appears on a command line and
+never touches disk in reusable form. Only `--exec` delegation — Battle.net
+pressing its own Play button — produces an authenticated external launch.
+
+Shipped behavior: Play = reset factions + activate campaign + delegate to
+Battle.net. The player is two clicks from resuming (lobby → Load Game);
+closing that gap requires Blizzard cooperation, not cleverness.
