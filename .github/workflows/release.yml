@@ -35,7 +35,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: svccm
+          shared-key: svccm-rel
           cache-on-failure: true
       # Frontend: Vite+ toolchain, then build the embedded UI.
       - uses: voidzero-dev/setup-vp@v1.17.0

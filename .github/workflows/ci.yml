@@ -21,7 +21,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: svccm
+          shared-key: svccm-ci
           cache-on-failure: true
       - run: cargo fmt --check --all
       - run: cargo clippy --all-targets -- -D warnings
