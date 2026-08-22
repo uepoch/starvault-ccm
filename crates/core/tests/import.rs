@@ -117,3 +117,40 @@ fn ingest_progress_reports_and_cancels() {
         .unwrap();
     assert_eq!(cancelled, None);
 }
+
+#[test]
+fn union_replaces_leftover_packed_mod_file_with_directory_form() {
+    // Old installs (old CCM, manual unzips) leave packed .SC2Mod FILES where a
+    // package ships an unpacked directory tree. The union must replace the
+    // stale form instead of failing with os error 183.
+    use svccm_core::layout::SlotId;
+    use svccm_core::store::{ModsUnionEntry, Store};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path().join("store")).unwrap();
+
+    // A package with an unpacked RaynorRogueRaw.SC2Mod directory (2 files).
+    let src = tmp.path().join("src");
+    let raw = src.join("Mods/RaynorRogueRaw.SC2Mod");
+    std::fs::create_dir_all(&raw).unwrap();
+    std::fs::write(raw.join("a.xml"), b"a").unwrap();
+    std::fs::write(raw.join("b.xml"), b"b").unwrap();
+    let plan = plan_from_extracted(&src).unwrap();
+    let rev = store.ingest("pkg", SlotId::Wol, &plan).unwrap();
+    let manifest = store.load_manifest("pkg", &rev).unwrap();
+
+    // The game Mods dir already has RaynorRogueRaw.SC2Mod as a packed FILE.
+    let mods_dir = tmp.path().join("game/Mods");
+    std::fs::create_dir_all(&mods_dir).unwrap();
+    std::fs::write(mods_dir.join("RaynorRogueRaw.SC2Mod"), b"packed-leftover").unwrap();
+
+    let refs = [&manifest];
+    let union = store.plan_mods_union(&refs).unwrap();
+    store.apply_mods_union(&union, &mods_dir).unwrap();
+
+    // The leftover file is gone; the unpacked tree is live.
+    let target = mods_dir.join("RaynorRogueRaw.SC2Mod");
+    assert!(target.is_dir());
+    assert!(target.join("a.xml").is_file());
+    assert!(target.join("b.xml").is_file());
+}

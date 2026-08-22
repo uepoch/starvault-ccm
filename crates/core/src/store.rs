@@ -360,10 +360,24 @@ impl Store {
     }
 
     /// Write the union's blobs into `mods_dir`, preserving relative paths.
+    /// An existing entry of the OPPOSITE kind (a leftover packed `.SC2Mod`
+    /// file where the package ships a directory, or vice versa) is replaced:
+    /// the union is the source of truth for what is active.
     pub fn apply_mods_union(&self, union: &[ModsUnionEntry<'_>], mods_dir: &Path) -> Result<()> {
         for entry in union {
             let target = mods_dir.join(&entry.rel_path);
             if let Some(parent) = target.parent() {
+                // A leftover packed .SC2Mod FILE where this package ships an
+                // unpacked directory tree: remove the file so the dirs can be
+                // created. The union is the source of truth for what is active.
+                if parent
+                    .symlink_metadata()
+                    .map(|m| !m.is_dir())
+                    .unwrap_or(false)
+                {
+                    std::fs::remove_file(parent)
+                        .map_err(|e| pkg_err(parent.display().to_string(), e.to_string()))?;
+                }
                 std::fs::create_dir_all(parent)?;
             }
             let src = self.blob_path(&entry.file.sha256);
