@@ -25,18 +25,27 @@ interface PreflightReport {
 function LaunchControls({ onError }: { onError: (msg: string) => void }) {
   const [report, setReport] = useState<PreflightReport | null>(null);
   const [repairing, setRepairing] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [launching, setLaunching] = useState(false);
 
   const runPreflight = () => {
-    invoke<PreflightReport>("launch_preflight").then(setReport).catch(onError);
+    setChecking(true);
+    invoke<PreflightReport>("launch_preflight")
+      .then(setReport)
+      .catch(onError)
+      .finally(() => setChecking(false));
   };
 
   const launch = async () => {
+    setLaunching(true);
     try {
       await invoke("launch_game");
     } catch (e) {
       // Exe unusable: offer the Battle.net fallback.
       await invoke("launch_battlenet").catch(() => {});
-      onError(String(e));
+      onError(errMessage(e));
+    } finally {
+      setLaunching(false);
     }
   };
 
@@ -55,10 +64,10 @@ function LaunchControls({ onError }: { onError: (msg: string) => void }) {
   return (
     <Stack gap="sm">
       <Group>
-        <Button variant="filled" onClick={runPreflight}>
+        <Button variant="filled" loading={checking} disabled={checking} onClick={runPreflight}>
           Pre-flight check
         </Button>
-        <Button variant="light" onClick={launch}>
+        <Button variant="light" loading={launching} disabled={launching} onClick={launch}>
           Launch StarCraft II
         </Button>
       </Group>

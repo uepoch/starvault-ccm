@@ -50,6 +50,7 @@ pub fn run() {
             commands::remove_package,
             commands::launch_preflight,
             commands::launch_game,
+            commands::launch_package,
             commands::launch_battlenet,
             commands::list_migration_candidates,
             commands::migrate_candidate,

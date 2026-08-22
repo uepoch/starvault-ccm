@@ -17,7 +17,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { IconPlayerPlay, IconTrash } from "@tabler/icons-react";
+import { IconCircleCheck, IconPlayerPlay, IconToggleRight, IconTrash } from "@tabler/icons-react";
 import {
   createColumnHelper,
   flexRender,
@@ -115,6 +115,22 @@ export default function Library({
     }
   };
 
+  const play = async (entry: LibraryEntry) => {
+    setBusyId(entry.id);
+    try {
+      await invoke("launch_package", { id: entry.id });
+      notifications.show({
+        color: "green",
+        message: `${entry.id} activated; game launching.`,
+      });
+      refresh();
+    } catch (e) {
+      notifications.show({ color: "red", title: "Play failed", message: errMessage(e) });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const remove = async (entry: LibraryEntry) => {
     setBusyId(entry.id);
     setRemoving(null);
@@ -171,9 +187,18 @@ export default function Library({
                 variant={active ? "filled" : "default"}
                 color="green"
                 disabled={active || busy}
-                loading={busy}
-                leftSection={<IconPlayerPlay size={14} />}
+                leftSection={active ? <IconCircleCheck size={14} /> : <IconToggleRight size={14} />}
                 onClick={() => activate(entry)}
+              >
+                {active ? "Activated" : "Activate"}
+              </Button>
+              <Button
+                size="compact-sm"
+                variant="light"
+                loading={busy}
+                disabled={busy}
+                leftSection={<IconPlayerPlay size={14} />}
+                onClick={() => play(entry)}
               >
                 Play
               </Button>

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button, Group, Modal, Stack, Text } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
 import { notifications } from "@mantine/notifications";
@@ -27,7 +28,7 @@ export default function ConflictDialog({
   onClose: () => void;
   onDone: () => void;
 }) {
-  const busy = false;
+  const [busy, setBusy] = useState(false);
 
   return (
     <Modal opened={state !== null} onClose={onClose} title="Dependency conflict" size="md">
@@ -52,10 +53,12 @@ export default function ConflictDialog({
           </Button>
           <Button
             color="orange"
+            loading={busy}
             disabled={busy}
             onClick={async () => {
               if (!state) return;
               const { info, retrySlot, retryId } = state;
+              setBusy(true);
               try {
                 await invoke("restore_campaign", { slot: info.other_slot });
                 notifications.show({
@@ -71,6 +74,8 @@ export default function ConflictDialog({
                 onDone();
               } catch (e) {
                 notifications.show({ color: "red", title: "Failed", message: errMessage(e) });
+              } finally {
+                setBusy(false);
               }
             }}
           >

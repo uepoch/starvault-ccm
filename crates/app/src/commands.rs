@@ -938,6 +938,61 @@ pub fn launch_game(app: AppHandle, store_state: tauri::State<'_, AppState>) -> R
         .map_err(|e| e.to_string())
 }
 
+/// One-click play from the Library: restore every active faction to plain,
+/// activate `id` on its faction, then launch the game. Resetting first
+/// guarantees a clean Mods\\ union, so no conflict is possible.
+#[tauri::command]
+pub async fn launch_package(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+    cache: tauri::State<'_, LibraryCache>,
+    id: String,
+) -> Result<(), CommandError> {
+    let cfg = load_config(&store_state)?;
+    let layout = layout_from_config(&cfg)?;
+    let store = store_state.store()?;
+
+    let revs: Vec<String> = store
+        .list_packages()
+        .map_err(CommandError::from)?
+        .into_iter()
+        .filter(|(pid, _, _)| pid == &id)
+        .map(|(_, rev, _)| rev)
+        .collect();
+    let rev = revs
+        .last()
+        .ok_or_else(|| CommandError::from(format!("package `{id}` is not installed")))?;
+    let candidate = store
+        .load_manifest(&id, rev)
+        .map_err(|e| CommandError::from(e.to_string()))?;
+    let slot = slot_from_str(&candidate.slot)?;
+
+    let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
+    for (active_slot, _, _) in store.active_slots().map_err(CommandError::from)? {
+        let s = slot_from_str(&active_slot)?;
+        manager
+            .restore(s)
+            .map_err(|e| CommandError::from(e.to_string()))?;
+    }
+    manager
+        .activate(slot, &id, rev)
+        .map_err(|e| CommandError::from(e.to_string()))?;
+    launch::launch(&layout).map_err(|e| CommandError::from(e.to_string()))?;
+
+    log_op(
+        &app,
+        "info",
+        "launch",
+        &format!(
+            "play {id}: factions reset, activated on {}, game launched",
+            slot.as_str()
+        ),
+    );
+    invalidate_library(&cache);
+    invalidate_campaigns(&store_state);
+    Ok(())
+}
+
 /// Battle.net deep link when the local exe is unusable.
 #[tauri::command]
 pub fn launch_battlenet(app: AppHandle) -> Result<(), String> {
