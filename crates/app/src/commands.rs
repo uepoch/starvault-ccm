@@ -1189,25 +1189,22 @@ pub fn remove_package(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn edit_package_metadata(
     app: AppHandle,
     store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
     id: String,
     title: String,
+    author: String,
     version: String,
     desc: String,
 ) -> Result<(), String> {
     let store = store_state.store()?;
     store
-        .set_metadata(&id, &title, &version, &desc)
+        .set_metadata(&id, &title, &author, &version, &desc)
         .map_err(|e| e.to_string())?;
-    log_op(
-        &app,
-        "info",
-        "edit",
-        &format!("updated metadata of {id}"),
-    );
+    log_op(&app, "info", "edit", &format!("updated metadata of {id}"));
     invalidate_library(&cache);
     Ok(())
 }

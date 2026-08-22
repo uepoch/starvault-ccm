@@ -79,6 +79,7 @@ export default function Library({
   const [removing, setRemoving] = useState<LibraryEntry | null>(null);
   const [editing, setEditing] = useState<LibraryEntry | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [editAuthor, setEditAuthor] = useState("");
   const [editVersion, setEditVersion] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
@@ -105,6 +106,7 @@ export default function Library({
   const openEdit = (entry: LibraryEntry) => {
     setEditing(entry);
     setEditTitle(entry.title ?? "");
+    setEditAuthor(entry.author ?? "");
     setEditVersion(entry.version ?? "");
     setEditDesc(entry.desc ?? "");
   };
@@ -116,6 +118,7 @@ export default function Library({
       await invoke("edit_package_metadata", {
         id: editing.id,
         title: editTitle,
+        author: editAuthor,
         version: editVersion,
         desc: editDesc,
       });
@@ -446,6 +449,11 @@ export default function Library({
             label="Title"
             value={editTitle}
             onChange={(e) => setEditTitle(e.currentTarget.value)}
+          />
+          <TextInput
+            label="Author"
+            value={editAuthor}
+            onChange={(e) => setEditAuthor(e.currentTarget.value)}
           />
           <TextInput
             label="Version"

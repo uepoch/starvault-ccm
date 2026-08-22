@@ -221,7 +221,14 @@ impl Store {
     /// Edit a package's user-facing metadata (title/version/description)
     /// across all of its revisions. Metadata is excluded from the content
     /// hash, so revision ids stay stable. Empty strings clear a field.
-    pub fn set_metadata(&self, id: &str, title: &str, version: &str, desc: &str) -> Result<()> {
+    pub fn set_metadata(
+        &self,
+        id: &str,
+        title: &str,
+        author: &str,
+        version: &str,
+        desc: &str,
+    ) -> Result<()> {
         let clean = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
         let pkg_dir = self.root.join("packages").join(id);
         let revs = sorted_dirs(&pkg_dir)?;
@@ -231,6 +238,7 @@ impl Store {
         for rev in revs {
             let mut m = self.load_manifest(id, &rev)?;
             m.title = clean(title);
+            m.author = clean(author);
             m.version = clean(version);
             m.desc = clean(desc);
             let json = serde_json::to_string_pretty(&m)
