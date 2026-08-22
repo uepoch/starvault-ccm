@@ -1,5 +1,6 @@
 #!/bin/sh
-# Release a version: verifies the changelog entry, tags, pushes the tag.
+# Release a version: verifies the changelog entry, then dispatches the
+# release workflow on main (it creates the tag and GitHub release itself).
 # Usage: scripts/release.sh v1.2.3
 set -e
 tag="${1:?usage: scripts/release.sh vX.Y.Z}"
@@ -13,6 +14,6 @@ if ! grep -q "## \[${tag#v}\]" CHANGELOG.md; then
   echo "Write the changelog entry first; releases without one are blocked." >&2
   exit 1
 fi
-git tag "$tag"
-git push origin "$tag"
-echo "Tagged and pushed $tag — the release workflow builds and attaches the installer."
+git push origin HEAD:main
+gh workflow run release.yml --ref main -f version="$tag"
+echo "Dispatched release $tag — watch it with 'gh run watch' or the Actions tab."
