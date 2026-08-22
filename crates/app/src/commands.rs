@@ -21,6 +21,13 @@ pub async fn list_library(
     store_state: tauri::State<'_, AppState>,
     cache: tauri::State<'_, LibraryCache>,
 ) -> Result<Vec<LibraryEntry>, String> {
+    list_library_inner(&store_state, &cache)
+}
+
+fn list_library_inner(
+    store_state: &tauri::State<'_, AppState>,
+    cache: &tauri::State<'_, LibraryCache>,
+) -> Result<Vec<LibraryEntry>, String> {
     let mut cached = cache.entries.lock().expect("library cache poisoned");
     if let Some(entries) = cached.as_ref() {
         return Ok(entries.clone());
@@ -29,6 +36,43 @@ pub async fn list_library(
     let entries = library::scan(&store).map_err(|e| e.to_string())?;
     *cached = Some(entries.clone());
     Ok(entries)
+}
+
+/// Recompute both caches off the UI path: after mutations and at startup,
+/// so a slow cold read (AV scanning freshly written files) never lands on
+/// the user.
+pub fn spawn_refresh(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let started = std::time::Instant::now();
+        let store_state = app.state::<AppState>();
+        let cache = app.state::<LibraryCache>();
+        if let Err(e) = list_library_inner(&store_state, &cache) {
+            log_op(
+                &app,
+                "warn",
+                "perf",
+                &format!("cache warm library failed: {e}"),
+            );
+        }
+        if let Err(e) = list_campaigns_inner(&app, &store_state) {
+            log_op(
+                &app,
+                "warn",
+                "perf",
+                &format!("cache warm campaigns failed: {e}"),
+            );
+        }
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_millis(500) {
+            log_op(
+                &app,
+                "warn",
+                "perf",
+                &format!("cache warm took {elapsed:?}"),
+            );
+        }
+    });
 }
 
 fn legacy_roaming_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -438,18 +482,28 @@ pub async fn list_campaigns(
     app: AppHandle,
     store_state: tauri::State<'_, AppState>,
 ) -> Result<Vec<CampaignSlot>, String> {
+    list_campaigns_inner(&app, &store_state)
+}
+
+fn list_campaigns_inner(
+    app: &AppHandle,
+    store_state: &tauri::State<'_, AppState>,
+) -> Result<Vec<CampaignSlot>, String> {
     let started = std::time::Instant::now();
     let store = store_state.store.clone();
-    let active: HashMap<String, (String, String)> = store
+    let t_ledger = std::time::Instant::now();
+    let active_map: HashMap<String, (String, String)> = store
         .active_slots()
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|(slot, id, rev)| (slot, (id, rev)))
         .collect();
+    let ledger_ms = t_ledger.elapsed().as_millis();
+    let t_manifests = std::time::Instant::now();
     let slots: Vec<CampaignSlot> = SlotId::ALL
         .into_iter()
         .map(|slot| {
-            let (title, pkg_id, rev, author, version) = match active.get(slot.as_str()) {
+            let (title, pkg_id, rev, author, version) = match active_map.get(slot.as_str()) {
                 Some((id, r)) => match store.load_manifest(id, r) {
                     Ok(m) => (
                         m.title.clone().unwrap_or_else(|| id.clone()),
@@ -473,12 +527,15 @@ pub async fn list_campaigns(
         })
         .collect();
     let elapsed = started.elapsed();
+    let manifests_ms = t_manifests.elapsed().as_millis();
     if elapsed > std::time::Duration::from_millis(200) {
         log_op(
-            &app,
+            app,
             "warn",
             "perf",
-            &format!("list_campaigns took {elapsed:?}"),
+            &format!(
+                "list_campaigns took {elapsed:?} (ledger {ledger_ms}ms, manifests {manifests_ms}ms)"
+            ),
         );
     }
     *store_state

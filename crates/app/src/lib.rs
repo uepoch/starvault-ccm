@@ -26,6 +26,7 @@ pub fn run() {
             // Marks the Log tab with the running build, so a stale exe is
             // obvious when diagnosing reports.
             commands::log_startup(app.handle());
+            commands::spawn_refresh(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
