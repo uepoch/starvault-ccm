@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { MantineProvider, createTheme, Tabs } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
@@ -21,6 +22,8 @@ interface ConfigDto {
 }
 
 export default function App() {
+  const [tab, setTab] = useState<string | null>(null);
+
   useEffect(() => {
     // Crash recovery, then first-run install detection.
     invoke("reconcile").catch(() => {});
@@ -43,10 +46,27 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // A campaign zip dropped on any view opens the import wizard.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const zip = event.payload.paths.find((p) => p.toLowerCase().endsWith(".zip"));
+        if (!zip) return;
+        setTab("library");
+        window.dispatchEvent(new CustomEvent("import-zip", { detail: zip }));
+      })
+      .then((fn) => {
+        unlisten = fn;
+      });
+    return () => unlisten?.();
+  }, []);
+
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
       <Notifications position="top-right" />
-      <Tabs defaultValue="library" keepMounted={false}>
+      <Tabs value={tab ?? "library"} onChange={setTab} keepMounted={false}>
         <Tabs.List px="lg" pt="sm">
           <Tabs.Tab value="library">Library</Tabs.Tab>
           <Tabs.Tab value="campaigns">Campaigns</Tabs.Tab>

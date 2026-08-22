@@ -13,7 +13,7 @@ use svccm_core::layout::SlotId;
 use svccm_core::library::{self, LegacyCcmInstall, LibraryEntry};
 use svccm_core::package::import::{extract_archive, preview_plan, ImportProgress};
 use svccm_core::package::normalize::plan_from_extracted;
-use svccm_core::store::Store;
+use svccm_core::store::{PackageManifest, Store};
 use tauri::{AppHandle, Emitter, Manager};
 
 #[tauri::command]
@@ -188,6 +188,51 @@ fn fallback_metadata(
         title,
         desc,
         ..Default::default()
+    }
+}
+
+/// A cross-slot dependency conflict (M5): what blocks an activation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConflictInfo {
+    /// First conflicting `Mods\` path.
+    pub target: String,
+    /// Total number of conflicting paths.
+    pub conflict_count: usize,
+    /// Package already deployed.
+    pub other_id: String,
+    /// Faction the other package occupies.
+    pub other_slot: String,
+}
+
+/// Typed command failure so the UI can branch on conflicts.
+#[derive(Debug, serde::Serialize)]
+pub struct CommandError {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<ConflictInfo>,
+}
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            conflict: None,
+        }
+    }
+}
+
+impl From<svccm_core::Error> for CommandError {
+    fn from(e: svccm_core::Error) -> Self {
+        Self {
+            message: e.to_string(),
+            conflict: None,
+        }
+    }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
     }
 }
 
@@ -554,48 +599,97 @@ pub async fn activate_campaign(
     cache: tauri::State<'_, LibraryCache>,
     slot: String,
     id: String,
-) -> Result<(), String> {
+) -> Result<(), CommandError> {
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store.clone();
 
-    // Latest installed revision of `id` (rows are sorted by revision string).
+    // Latest installed revision of `id`.
     let revs: Vec<String> = store
         .list_packages()
-        .map_err(|e| e.to_string())?
+        .map_err(CommandError::from)?
         .into_iter()
         .filter(|(pid, _, _)| pid == &id)
         .map(|(_, rev, _)| rev)
         .collect();
     let rev = revs
         .last()
-        .ok_or(format!("package `{id}` is not installed"))?
-        .clone();
+        .ok_or_else(|| CommandError::from(format!("package `{id}` is not installed")))?;
 
     // A campaign only loads through its own launcher, so the package's slot
     // is a fact, not a preference: enforce the binding at the boundary.
-    let manifest_slot = store
-        .load_manifest(&id, &rev)
-        .map_err(|e| e.to_string())?
-        .slot;
-    if manifest_slot != slot.as_str() {
-        return Err(format!(
+    let candidate = store
+        .load_manifest(&id, rev)
+        .map_err(|e| CommandError::from(e.to_string()))?;
+    if candidate.slot != slot.as_str() {
+        return Err(CommandError::from(format!(
             "`{id}` is built for the {} campaign and cannot go on {}",
-            manifest_slot,
+            candidate.slot,
             slot.as_str()
-        ));
+        )));
+    }
+
+    // M5 pre-check with structured detail for the conflict dialog. The
+    // authoritative block still happens inside `activate`.
+    let mut would_deploy: Vec<PackageManifest> = Vec::new();
+    let mut other_slots: HashMap<String, String> = HashMap::new();
+    for (active_slot, active_id, active_rev) in store.active_slots().map_err(CommandError::from)? {
+        if active_slot == slot.as_str() {
+            continue; // being replaced
+        }
+        other_slots.insert(active_id.clone(), active_slot.clone());
+        would_deploy.push(
+            store
+                .load_manifest(&active_id, &active_rev)
+                .map_err(CommandError::from)?,
+        );
+    }
+    would_deploy.push(candidate.clone());
+    let refs: Vec<&PackageManifest> = would_deploy.iter().collect();
+    let conflicts = store.find_conflicts(&refs);
+    if let Some(first) = conflicts.first() {
+        // The conflicting owner that is not the package being activated.
+        let other_id = if first.second.0 == id {
+            &first.first.0
+        } else {
+            &first.second.0
+        };
+        let other_slot = other_slots
+            .get(other_id.as_str())
+            .cloned()
+            .unwrap_or_default()
+            .to_string();
+        log_op(
+            &app,
+            "warn",
+            "activate",
+            &format!("{id} blocked by {other_id} on {}", first.target),
+        );
+        return Err(CommandError {
+            message: format!(
+                "`{id}` conflicts with `{other_id}` on {} (+{} more)",
+                first.target,
+                conflicts.len() - 1
+            ),
+            conflict: Some(ConflictInfo {
+                target: first.target.clone(),
+                conflict_count: conflicts.len(),
+                other_id: other_id.to_string(),
+                other_slot,
+            }),
+        });
     }
 
     let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
-    if let Err(e) = manager.activate(slot, &id, &rev) {
+    if let Err(e) = manager.activate(slot, &id, rev) {
         log_op(
             &app,
             "error",
             "activate",
             &format!("{id} → {}: {e}", slot.as_str()),
         );
-        return Err(e.to_string());
+        return Err(CommandError::from(e.to_string()));
     }
     log_op(
         &app,

@@ -69,6 +69,17 @@ export default function ImportWizard({
   const [activating, setActivating] = useState(false);
   const opRef = useRef<string | null>(null);
   opRef.current = opId;
+  const analyzeRef = useRef<((path?: string) => Promise<void>) | null>(null);
+
+  useEffect(() => {
+    // A zip dropped on any view lands here via App.tsx.
+    const onImportZip = (e: Event) => {
+      setOpened(true);
+      void analyzeRef.current?.((e as CustomEvent<string>).detail);
+    };
+    window.addEventListener("import-zip", onImportZip);
+    return () => window.removeEventListener("import-zip", onImportZip);
+  }, []);
 
   useEffect(() => {
     const unlisten = listen<ProgressEvent>("import-progress", (event) => {
@@ -91,12 +102,15 @@ export default function ImportWizard({
     setResult(null);
   };
 
-  const startAnalyze = async () => {
-    const selected = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: "Package", extensions: ["zip"] }],
-    });
+  const startAnalyze = async (droppedPath?: string) => {
+    let selected = droppedPath ?? null;
+    if (!selected) {
+      selected = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "Package", extensions: ["zip"] }],
+      });
+    }
     if (!selected) return;
     const newOpId = crypto.randomUUID();
     setOpId(newOpId);
@@ -117,6 +131,8 @@ export default function ImportWizard({
       setError(String(e));
     }
   };
+
+  analyzeRef.current = startAnalyze;
 
   const startIngest = async () => {
     if (!opId || !id || !slot) return;
@@ -176,7 +192,13 @@ export default function ImportWizard({
 
           {step === 0 && (
             <Stack gap="sm" justify="center" flex={1}>
-              <Button onClick={startAnalyze}>Choose campaign zip…</Button>
+              <Button
+                onClick={() => {
+                  void startAnalyze();
+                }}
+              >
+                Choose campaign zip…
+              </Button>
             </Stack>
           )}
 
@@ -236,10 +258,11 @@ export default function ImportWizard({
                 maxRows={4}
               />
               <div>
-                <Text size="sm" fw={500} mb={4}>
-                  Faction
-                  {preview.matched_pattern ? ` (matched "${preview.matched_pattern}")` : ""}
-                </Text>
+                {preview.matched_pattern && (
+                  <Text size="xs" c="dimmed" mb={4}>
+                    detected via "{preview.matched_pattern}"
+                  </Text>
+                )}
                 {preview.slot_guess !== "unknown" ? (
                   <Badge size="lg" variant="light">
                     {SLOTS.find((s) => s.value === preview.slot_guess)?.label}

@@ -233,8 +233,8 @@ impl Store {
             .join("manifest.json");
         let file = std::fs::File::open(&path)
             .map_err(|e| pkg_err(path.display().to_string(), e.to_string()))?;
-        let manifest: PackageManifest =
-            serde_json::from_reader(file).map_err(|e| pkg_err(id, format!("parse manifest: {e}")))?;
+        let manifest: PackageManifest = serde_json::from_reader(file)
+            .map_err(|e| pkg_err(id, format!("parse manifest: {e}")))?;
         self.manifests
             .lock()
             .expect("manifest cache poisoned")
@@ -264,6 +264,38 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    /// All cross-package conflicts in a would-be union: same `Mods\` path,
+    /// different bytes. `plan_mods_union` blocks on these; this collects
+    /// every one so the UI can show details.
+    pub fn find_conflicts(&self, manifests: &[&PackageManifest]) -> Vec<Conflict> {
+        let mut by_lower: BTreeMap<String, (&str, &str)> = BTreeMap::new();
+        let mut seen_targets: std::collections::BTreeSet<String> = Default::default();
+        let mut out = Vec::new();
+        for manifest in manifests {
+            for file in &manifest.files {
+                let Some(rel) = file.path.strip_prefix("mods/") else {
+                    continue;
+                };
+                let key = rel.to_ascii_lowercase();
+                match by_lower.get(&key) {
+                    None => {
+                        by_lower.insert(key, (manifest.id.as_str(), file.sha256.as_str()));
+                    }
+                    Some((owner, sha)) => {
+                        if *sha != file.sha256 && seen_targets.insert(key.clone()) {
+                            out.push(Conflict {
+                                target: format!("Mods\\{rel}"),
+                                first: ((*owner).to_string(), String::new()),
+                                second: (manifest.id.clone(), String::new()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Copy all `slot/**` files of a manifest into `dest`.
