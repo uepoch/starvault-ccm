@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Main window defaults: core IPC plus the file dialog.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default", "updater:default"]
+  "permissions": ["core:default", "dialog:default", "updater:default", "opener:default"]
 }
