@@ -23,6 +23,9 @@ pub fn run() {
                 campaigns_cache: Default::default(),
                 config_path: data_dir.join("config.toml"),
             });
+            // Marks the Log tab with the running build, so a stale exe is
+            // obvious when diagnosing reports.
+            commands::log_startup(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

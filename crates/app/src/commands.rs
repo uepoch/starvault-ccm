@@ -91,6 +91,15 @@ fn invalidate_campaigns(state: &tauri::State<'_, AppState>) {
 /// Minimum recorded level: 0=info, 1=warn, 2=error. Set from config.
 static LOG_MIN_LEVEL: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
+pub fn log_startup(app: &AppHandle) {
+    log_op(
+        app,
+        "info",
+        "startup",
+        &format!("StarVault CCM v{}", env!("CARGO_PKG_VERSION")),
+    );
+}
+
 pub fn init_log_level(config_path: &PathBuf) {
     let level = Config::load(config_path)
         .map(|c| c.log_level)
