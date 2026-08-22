@@ -1,0 +1,3 @@
+[alias]
+# Iteration build: debug speed, embedded UI (no dev server needed).
+app = "build -p svccm-app --features custom-protocol"
