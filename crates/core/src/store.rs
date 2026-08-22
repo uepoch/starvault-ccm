@@ -12,7 +12,7 @@
 //! The store is game-agnostic: it materializes subtrees to directories it is
 //! given; slot/Mods path knowledge stays in `layout` and `slots`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -76,6 +76,10 @@ pub struct ModsUnionEntry<'a> {
 pub struct Store {
     root: PathBuf,
     conn: Mutex<rusqlite::Connection>,
+    /// Loaded manifests by `id\0rev`. Revisions are immutable, so entries
+    /// live for the process lifetime — on AV-heavy machines a single small
+    /// file open can cost hundreds of ms, and nothing here ever changes.
+    manifests: Mutex<HashMap<(String, String), PackageManifest>>,
 }
 
 impl Store {
@@ -108,6 +112,7 @@ impl Store {
         Ok(Self {
             root,
             conn: Mutex::new(conn),
+            manifests: Mutex::new(HashMap::new()),
         })
     }
 
@@ -214,6 +219,12 @@ impl Store {
 
     /// Load a stored manifest.
     pub fn load_manifest(&self, id: &str, rev: &str) -> Result<PackageManifest> {
+        {
+            let manifests = self.manifests.lock().expect("manifest cache poisoned");
+            if let Some(hit) = manifests.get(&(id.to_string(), rev.to_string())) {
+                return Ok(hit.clone());
+            }
+        }
         let path = self
             .root
             .join("packages")
@@ -222,7 +233,13 @@ impl Store {
             .join("manifest.json");
         let file = std::fs::File::open(&path)
             .map_err(|e| pkg_err(path.display().to_string(), e.to_string()))?;
-        serde_json::from_reader(file).map_err(|e| pkg_err(id, format!("parse manifest: {e}")))
+        let manifest: PackageManifest =
+            serde_json::from_reader(file).map_err(|e| pkg_err(id, format!("parse manifest: {e}")))?;
+        self.manifests
+            .lock()
+            .expect("manifest cache poisoned")
+            .insert((id.to_string(), rev.to_string()), manifest.clone());
+        Ok(manifest)
     }
 
     /// All installed packages as (id, rev, slot), one row per revision.
