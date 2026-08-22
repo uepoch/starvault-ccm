@@ -232,7 +232,6 @@ fn find_battlenet_exe() -> Option<&'static std::path::Path> {
         .iter()
         .map(std::path::Path::new)
         .find(|p| p.is_file())
-        .map(|p| p)
         .or_else(|| {
             let user = std::env::var("USERNAME").ok()?;
             let p = std::path::PathBuf::from(format!(
