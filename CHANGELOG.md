@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.1.2] — 2026-08-22
+
+No app changes: release pipeline now builds with a warm dependency cache.
+
 ## [0.1.1] — 2026-08-22
 
 - Automatic updates: the app checks for a new release at startup and
