@@ -88,3 +88,17 @@ Consequences:
   save directories under `Documents\StarCraft II\Accounts\<hash>\Saves\`.
   Complications: variable account hashes, OneDrive redirection, live game
   handles. Revisit only if players ask.
+
+## Performance notes
+
+Real-time antivirus adds large per-file-open costs in `%APPDATA%`
+(measured: 80ms+ for a small JSON read, hundreds of ms when the file
+was just written). The store mitigates by design: content-addressed
+blobs and immutable manifests are memoized in memory for the process
+lifetime, and caches recompute in the background after mutations, so
+the UI never waits on disk after startup.
+
+For best latency users can exclude the app data folder
+(`%APPDATA%\StarVault\CCM`) from real-time scanning; the installer
+should offer this. The game directory itself should never be
+excluded on the tool's account.
