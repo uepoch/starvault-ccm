@@ -156,7 +156,9 @@ impl<'a> SlotManager<'a> {
             })?;
         }
         // Defensive: never hand the junction API an occupied path.
-        let _ = std::fs::remove_file(&slot_dir);
+        if slot_dir.symlink_metadata().is_ok() {
+            let _ = remove_junction(&slot_dir);
+        }
         if let Err(e) = make_junction(&slot_dir, &deployed) {
             // Restore the previous state; the caller may fall back to copy.
             if backup.symlink_metadata().is_ok() && slot_dir.symlink_metadata().is_err() {
@@ -215,7 +217,16 @@ impl<'a> SlotManager<'a> {
         if slot == SlotId::Wol {
             clear_dir_contents(&slot_dir, &PROTECTED_SIBLINGS)?;
         } else if slot_dir.exists() || symlink_or_junction_exists(&slot_dir) {
-            std::fs::remove_dir_all(&slot_dir)?;
+            // A junction is removed as a link — never delete the store
+            // target it points at.
+            if std::fs::symlink_metadata(&slot_dir)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                remove_junction(&slot_dir)?;
+            } else {
+                std::fs::remove_dir_all(&slot_dir)?;
+            }
             std::fs::create_dir_all(&slot_dir)?;
         }
         self.store.clear_active_slot(slot)?;
@@ -238,7 +249,7 @@ impl<'a> SlotManager<'a> {
                         .map(|t| !t.exists())
                         .unwrap_or(true)
                 {
-                    std::fs::remove_file(&slot_dir)?;
+                    remove_junction(&slot_dir)?;
                     self.store.clear_active_slot(slot)?;
                     report.push(format!(
                         "{}: dangling junction removed; activate again",
@@ -329,6 +340,18 @@ fn make_junction(_link: &Path, _target: &Path) -> std::io::Result<()> {
     Err(std::io::Error::other("junctions require Windows"))
 }
 
+/// Remove a junction/link itself without touching its target. A junction is
+/// a directory reparse point: `remove_file` fails with access-denied on
+/// Windows — it must be removed like a directory.
+fn remove_junction(path: &Path) -> Result<()> {
+    let result = if cfg!(windows) {
+        std::fs::remove_dir(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    result.map_err(|e| pkg_err(path.display().to_string(), format!("remove junction: {e}")))
+}
+
 /// A directory exists, or a link exists in its place (rename over a plain
 /// `exists()` misses junctions whose target was checked first).
 fn symlink_or_junction_exists(path: &Path) -> bool {
@@ -345,8 +368,13 @@ fn sibling_path(dir: &Path, kind: &str) -> PathBuf {
 }
 
 fn cleanup_if_exists(path: &Path) -> bool {
-    // symlink_metadata so dangling junctions/links count as existing.
-    if std::fs::symlink_metadata(path).is_ok() {
+    // symlink_metadata so dangling junctions/links count as existing;
+    // remove_dir_all follows junctions on Windows, so links go through
+    // remove_junction (target untouched).
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if meta.file_type().is_symlink() {
+            return remove_junction(path).is_ok();
+        }
         return std::fs::remove_dir_all(path).is_ok();
     }
     false

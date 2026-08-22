@@ -410,12 +410,17 @@ pub fn import_cancel(store_state: tauri::State<'_, AppState>, op_id: String) {
 /// Wipe all app data: store, ledger, log, config. Confirmation happens in
 /// the UI; this is unrecoverable.
 #[tauri::command]
-pub fn clear_all_data(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub fn clear_all_data(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    cache: tauri::State<'_, LibraryCache>,
+) -> Result<(), String> {
     // Drop the shared ledger connection first: Windows refuses to delete
     // files that are still open.
     *state.store.lock().expect("store poisoned") = None;
     *state.config_cache.lock().expect("config poisoned") = None;
     *state.campaigns_cache.lock().expect("campaigns poisoned") = None;
+    invalidate_library(&cache);
 
     let data_dir = app
         .path()
@@ -434,6 +439,8 @@ pub fn clear_all_data(app: AppHandle, state: tauri::State<'_, AppState>) -> Resu
     if scratch.symlink_metadata().is_ok() {
         remove_with_retry(&scratch)?;
     }
+    // Warm the now-empty caches so the next visit reflects reality.
+    spawn_refresh(&app);
     Ok(())
 }
 
@@ -884,16 +891,25 @@ pub async fn reconcile(
     }
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store()?;
-    let notes = SlotManager::new(&layout, &store)
+    match SlotManager::new(&layout, &store)
         .with_strategy(cfg.strategy_override)
         .reconcile()
-        .map_err(|e| e.to_string())?;
-    for note in &notes {
-        log_op(&app, "warn", "reconcile", note);
-        // Repairs touch slots; drop cached views.
-        invalidate_campaigns(&store_state);
+    {
+        Ok(notes) => {
+            for note in &notes {
+                log_op(&app, "warn", "reconcile", note);
+                // Repairs touch slots; drop cached views.
+                invalidate_campaigns(&store_state);
+            }
+            Ok(notes)
+        }
+        Err(e) => {
+            // Surface what failed and where — reconcile errors lose their
+            // path context through `to_string` alone.
+            log_op(&app, "error", "reconcile", &format!("{e:#}"));
+            Err(e.to_string())
+        }
     }
-    Ok(notes)
 }
 
 // --- launch (X1) -------------------------------------------------------------
