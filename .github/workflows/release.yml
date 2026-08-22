@@ -38,7 +38,7 @@ jobs:
       - run: vp build
         working-directory: crates/app/ui
       # NSIS installer + signed updater bundle via the Tauri CLI.
-      - run: ui/node_modules/.bin/tauri build --no-bundle-check
+      - run: ui/node_modules/.bin/tauri build
         working-directory: crates/app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
