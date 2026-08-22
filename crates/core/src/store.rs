@@ -218,6 +218,34 @@ impl Store {
     }
 
     /// Load a stored manifest.
+    /// Edit a package's user-facing metadata (title/version/description)
+    /// across all of its revisions. Metadata is excluded from the content
+    /// hash, so revision ids stay stable. Empty strings clear a field.
+    pub fn set_metadata(&self, id: &str, title: &str, version: &str, desc: &str) -> Result<()> {
+        let clean = |s: &str| (!s.trim().is_empty()).then(|| s.trim().to_string());
+        let pkg_dir = self.root.join("packages").join(id);
+        let revs = sorted_dirs(&pkg_dir)?;
+        if revs.is_empty() {
+            return Err(pkg_err(id, "package is not installed"));
+        }
+        for rev in revs {
+            let mut m = self.load_manifest(id, &rev)?;
+            m.title = clean(title);
+            m.version = clean(version);
+            m.desc = clean(desc);
+            let json = serde_json::to_string_pretty(&m)
+                .map_err(|e| pkg_err(id, format!("serialize: {e}")))?;
+            let path = pkg_dir.join(&rev).join("manifest.json");
+            std::fs::write(&path, json)
+                .map_err(|e| pkg_err(path.display().to_string(), e.to_string()))?;
+            self.manifests
+                .lock()
+                .expect("manifest cache poisoned")
+                .insert((id.to_string(), rev), m);
+        }
+        Ok(())
+    }
+
     pub fn load_manifest(&self, id: &str, rev: &str) -> Result<PackageManifest> {
         {
             let manifests = self.manifests.lock().expect("manifest cache poisoned");

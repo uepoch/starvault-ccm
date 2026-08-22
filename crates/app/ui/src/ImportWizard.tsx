@@ -250,16 +250,16 @@ export default function ImportWizard({
                 onChange={(e) => setId(e.currentTarget.value)}
               />
               <TextInput
-                label="Version"
-                placeholder={preview.version ? undefined : "1.0"}
-                value={version}
-                onChange={(e) => setVersion(e.currentTarget.value)}
-              />
-              <TextInput
                 label="Title"
                 placeholder={preview.title ? undefined : "Nothing detected — name it yourself"}
                 value={title}
                 onChange={(e) => setTitle(e.currentTarget.value)}
+              />
+              <TextInput
+                label="Version"
+                placeholder={preview.version ? undefined : "1.0"}
+                value={version}
+                onChange={(e) => setVersion(e.currentTarget.value)}
               />
               <Textarea
                 label="Description"

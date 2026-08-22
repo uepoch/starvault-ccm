@@ -232,7 +232,7 @@ export default function Campaigns() {
               <Group justify="space-between" mt="xs">
                 <Button
                   size="xs"
-                  variant="light"
+                  variant="subtle"
                   disabled={busy !== null}
                   onClick={() => setPicking(entry.slot)}
                 >
@@ -240,7 +240,7 @@ export default function Campaigns() {
                 </Button>
                 <Button
                   size="xs"
-                  variant="default"
+                  variant="subtle"
                   disabled={!entry.pkg_id || busy !== null}
                   loading={busy === `restore-${entry.slot}`}
                   onClick={() => restore(entry.slot)}

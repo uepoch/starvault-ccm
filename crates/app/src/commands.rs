@@ -1188,6 +1188,30 @@ pub fn remove_package(
     Ok(())
 }
 
+#[tauri::command]
+pub fn edit_package_metadata(
+    app: AppHandle,
+    store_state: tauri::State<'_, AppState>,
+    cache: tauri::State<'_, LibraryCache>,
+    id: String,
+    title: String,
+    version: String,
+    desc: String,
+) -> Result<(), String> {
+    let store = store_state.store()?;
+    store
+        .set_metadata(&id, &title, &version, &desc)
+        .map_err(|e| e.to_string())?;
+    log_op(
+        &app,
+        "info",
+        "edit",
+        &format!("updated metadata of {id}"),
+    );
+    invalidate_library(&cache);
+    Ok(())
+}
+
 // --- changelog ---------------------------------------------------------------
 
 /// The changelog embedded at build time (crates/app/../../CHANGELOG.md).

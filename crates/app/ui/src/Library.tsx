@@ -14,6 +14,7 @@ import {
   Stack,
   Table,
   Text,
+  Textarea,
   TextInput,
   Title,
   Tooltip,
@@ -21,6 +22,7 @@ import {
 import {
   IconCircleCheck,
   IconFolder,
+  IconPencil,
   IconPlayerPlay,
   IconToggleRight,
   IconTrash,
@@ -75,6 +77,11 @@ export default function Library({
   const [error, setError] = useState<string | null>(null);
   const [legacy, setLegacy] = useState<LegacyCcmInstall | null>(null);
   const [removing, setRemoving] = useState<LibraryEntry | null>(null);
+  const [editing, setEditing] = useState<LibraryEntry | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editVersion, setEditVersion] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -94,6 +101,33 @@ export default function Library({
       .then(setLegacy)
       .catch(() => setLegacy(null));
   }, []);
+
+  const openEdit = (entry: LibraryEntry) => {
+    setEditing(entry);
+    setEditTitle(entry.title ?? "");
+    setEditVersion(entry.version ?? "");
+    setEditDesc(entry.desc ?? "");
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      await invoke("edit_package_metadata", {
+        id: editing.id,
+        title: editTitle,
+        version: editVersion,
+        desc: editDesc,
+      });
+      notifications.show({ color: "green", message: `Metadata of ${editing.id} updated.` });
+      setEditing(null);
+      refresh();
+    } catch (e) {
+      notifications.show({ color: "red", title: "Update failed", message: errMessage(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const activate = async (entry: LibraryEntry) => {
     setBusyId(entry.id);
@@ -197,7 +231,7 @@ export default function Library({
               <Tooltip label={active ? "Activated" : "Activate"}>
                 <Button
                   size="compact-sm"
-                  variant={active ? "filled" : "default"}
+                  variant="subtle"
                   color="green"
                   disabled={active || busy}
                   px={5}
@@ -205,6 +239,19 @@ export default function Library({
                   aria-label={active ? "Activated" : "Activate"}
                 >
                   {active ? <IconCircleCheck size={16} /> : <IconToggleRight size={16} />}
+                </Button>
+              </Tooltip>
+              <Tooltip label="Edit metadata">
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  color="gray"
+                  disabled={busy}
+                  px={5}
+                  onClick={() => openEdit(entry)}
+                  aria-label="Edit metadata"
+                >
+                  <IconPencil size={16} />
                 </Button>
               </Tooltip>
               <Tooltip label="Open folder">
@@ -388,6 +435,36 @@ export default function Library({
               onClick={() => removing && remove(removing)}
             >
               Remove
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal opened={editing !== null} onClose={() => setEditing(null)} title="Edit metadata">
+        <Stack gap="sm">
+          <TextInput
+            label="Title"
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.currentTarget.value)}
+          />
+          <TextInput
+            label="Version"
+            value={editVersion}
+            onChange={(e) => setEditVersion(e.currentTarget.value)}
+          />
+          <Textarea
+            label="Description"
+            value={editDesc}
+            onChange={(e) => setEditDesc(e.currentTarget.value)}
+            autosize
+            maxRows={6}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setEditing(null)}>
+              Cancel
+            </Button>
+            <Button loading={saving} onClick={saveEdit}>
+              Save
             </Button>
           </Group>
         </Stack>
