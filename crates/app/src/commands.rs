@@ -1209,6 +1209,14 @@ pub fn edit_package_metadata(
     Ok(())
 }
 
+// --- updater -----------------------------------------------------------------
+
+/// Restart the app after an update has been installed.
+#[tauri::command]
+pub fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 // --- changelog ---------------------------------------------------------------
 
 /// The changelog embedded at build time (crates/app/../../CHANGELOG.md).
