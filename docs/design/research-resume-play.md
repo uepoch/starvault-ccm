@@ -61,3 +61,28 @@ No MPQ parsing, no bank parsing, no new deps — mtime + filename + one spawn. (
 - End-to-end `-run save.SC2Save` on this machine: **pending manual test** (top risk above). Also: does SC2 require the save to sit under the live profile's Saves tree (our junction satisfies this by design — confirm during the test)?
 - wow-mpq extraction of `SaveInfo`/`BankData` member names: community-sourced, unverified — irrelevant unless deep parsing is ever wanted.
 - Local bank file contents: not read (no shell/dir-list in this session) — parent can `cat` one under `Banks\` if ever needed.
+
+---
+
+## Postscript: launch path resolution (live-tested 2026-08-22)
+
+The full matrix, after hands-on testing on the target machine:
+
+| Method | Result |
+| --- | --- |
+| `Battle.net.exe --exec="launch S2"` | **WORKS** — full SSO (`-sso=1 -launch -uid s2`), zero clicks. THE launch path. |
+| SC2Switcher + `-sso=1 -launch -uid s2` | Partial — works only with a warm agent session; cold = legacy login page. Fallback only. |
+| SC2Switcher + `-portal 127.0.0.1` (offline trick) | Ignored on current build. |
+| SC2Switcher + `-gnoLoginToken -unauthenticated -login offline_user` | Still shows login. |
+| `battlenet://starcraft` / `battlenet://STC` deep links | Received by the app (UriController logs them) but silently dropped — no launch. |
+| `-run <save.SC2Save>` | Confirmed dead for resume (engine dispatch exists but the game never reaches it without the SSO context). |
+
+Critical operational detail: the SSO token is minted per-launch inside
+Battle.net's process and handed to the game out-of-band (registry shows
+`ACCOUNT=(hidden) ACCOUNT_TS=...`) — it is not injectable, ever, from an
+external process. Only `--exec` delegation gives us authenticated launches.
+
+**Race guard (required):** the Agent keeps tracking a closed game session for
+a few seconds; launching inside that window crashes the game at boot with
+"an error occurred starting StarCraft II". Wait for the process to exit,
+then ~6s more, before delegating.
