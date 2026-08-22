@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.1] — 2026-08-22
+
+- Automatic updates: the app checks for a new release at startup and
+  installs it in the background; it takes effect on next launch.
+- Metadata editor: edit a package's title, author, version, and description
+  from the Library.
+- Import view: editable version field; Title above Version.
+- Action buttons unified to the background-less style (Play keeps emphasis).
+- Fixed shared-mods deployment failing with "os error 183" when a leftover
+  packed mod file blocked an unpacked one.
+
 ## [0.1.0] — 2026-08-22
 
 First public pre-alpha. Windows 10+.
