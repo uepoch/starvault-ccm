@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.3] — 2026-08-23
+
+- Single-instance: launching the app again focuses the existing window.
+- Log view: wider Level column; Settings cards fill the window; smaller
+  default window size.
+
 ## [0.1.2] — 2026-08-22
 
 No app changes: release pipeline now builds with a warm dependency cache.

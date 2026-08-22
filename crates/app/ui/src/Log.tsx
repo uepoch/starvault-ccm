@@ -58,7 +58,7 @@ export default function Log() {
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Time</Table.Th>
-              <Table.Th>Level</Table.Th>
+              <Table.Th w={120}>Level</Table.Th>
               <Table.Th>Operation</Table.Th>
               <Table.Th>Detail</Table.Th>
             </Table.Tr>

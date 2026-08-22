@@ -107,7 +107,7 @@ export default function Settings() {
   };
 
   return (
-    <Stack p="lg" gap="lg" maw={980}>
+    <Stack p="lg" gap="lg" h="100%">
       <Title order={2}>Settings</Title>
 
       <Grid>
