@@ -16,8 +16,15 @@ import {
   Text,
   TextInput,
   Title,
+  Tooltip,
 } from "@mantine/core";
-import { IconCircleCheck, IconPlayerPlay, IconToggleRight, IconTrash } from "@tabler/icons-react";
+import {
+  IconCircleCheck,
+  IconFolder,
+  IconPlayerPlay,
+  IconToggleRight,
+  IconTrash,
+} from "@tabler/icons-react";
 import {
   createColumnHelper,
   flexRender,
@@ -131,6 +138,15 @@ export default function Library({
     }
   };
 
+  const reveal = async (entry: LibraryEntry) => {
+    try {
+      const path = await invoke<string>("reveal_package", { id: entry.id });
+      notifications.show({ color: "blue", message: `Opened ${path}.` });
+    } catch (e) {
+      notifications.show({ color: "red", title: "Could not open folder", message: errMessage(e) });
+    }
+  };
+
   const remove = async (entry: LibraryEntry) => {
     setBusyId(entry.id);
     setRemoving(null);
@@ -181,17 +197,33 @@ export default function Library({
           const active = entry.active_on.length > 0;
           const busy = busyId === entry.id;
           return (
-            <Group gap="xs" wrap="nowrap">
-              <Button
-                size="compact-sm"
-                variant={active ? "filled" : "default"}
-                color="green"
-                disabled={active || busy}
-                leftSection={active ? <IconCircleCheck size={14} /> : <IconToggleRight size={14} />}
-                onClick={() => activate(entry)}
-              >
-                {active ? "Activated" : "Activate"}
-              </Button>
+            <Group gap="xs" wrap="nowrap" justify="flex-end">
+              <Tooltip label={active ? "Activated" : "Activate on its faction"}>
+                <Button
+                  size="compact-sm"
+                  variant={active ? "filled" : "default"}
+                  color="green"
+                  disabled={active || busy}
+                  px={5}
+                  onClick={() => activate(entry)}
+                  aria-label={active ? "Activated" : "Activate"}
+                >
+                  {active ? <IconCircleCheck size={16} /> : <IconToggleRight size={16} />}
+                </Button>
+              </Tooltip>
+              <Tooltip label="Open folder">
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  color="gray"
+                  disabled={busy}
+                  px={5}
+                  onClick={() => reveal(entry)}
+                  aria-label="Open folder"
+                >
+                  <IconFolder size={16} />
+                </Button>
+              </Tooltip>
               <Button
                 size="compact-sm"
                 variant="light"
@@ -202,15 +234,19 @@ export default function Library({
               >
                 Play
               </Button>
-              <Button
-                size="compact-sm"
-                variant="subtle"
-                color="red"
-                disabled={busy}
-                onClick={() => setRemoving(entry)}
-              >
-                <IconTrash size={14} />
-              </Button>
+              <Tooltip label="Remove">
+                <Button
+                  size="compact-sm"
+                  variant="subtle"
+                  color="red"
+                  disabled={busy}
+                  px={5}
+                  onClick={() => setRemoving(entry)}
+                  aria-label="Remove"
+                >
+                  <IconTrash size={16} />
+                </Button>
+              </Tooltip>
             </Group>
           );
         },

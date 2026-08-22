@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use svccm_core::layout::SlotId;
+use svccm_core::layout::{GameLayout, SlotId};
 use svccm_core::library::{self, LegacyCcmInstall, LibraryEntry};
 use svccm_core::package::import::{extract_archive, preview_plan, ImportProgress};
 use svccm_core::package::normalize::plan_from_extracted;
@@ -1058,6 +1058,49 @@ pub fn migrate_candidate(
 #[tauri::command]
 pub fn discover_game_exe() -> Option<String> {
     svccm_core::layout::discover_install().map(|p| p.display().to_string())
+}
+
+/// Open the package's content folder in Explorer: the store's deploy tree
+/// when one exists (that is what the game reads through the junction), else
+/// the game's faction directory. Returns the path opened.
+#[tauri::command]
+pub fn reveal_package(
+    store_state: tauri::State<'_, AppState>,
+    id: String,
+) -> Result<String, String> {
+    let store = store_state.store()?;
+    let revs: Vec<String> = store
+        .list_packages()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|(pid, _, _)| pid == &id)
+        .map(|(_, rev, _)| rev)
+        .collect();
+    let rev = revs
+        .last()
+        .ok_or_else(|| format!("package `{id}` is not installed"))?
+        .clone();
+    let manifest = store.load_manifest(&id, &rev).map_err(|e| e.to_string())?;
+
+    let deploy = store
+        .root()
+        .join("deploy")
+        .join(format!("{}-{}", manifest.slot, manifest.rev));
+    let target = if deploy.is_dir() {
+        deploy
+    } else {
+        let cfg = load_config(&store_state)?;
+        let layout = layout_from_config(&cfg)?;
+        let slot = slot_from_str(&manifest.slot)?;
+        layout.slot_dir(slot)
+    };
+
+    #[cfg(windows)]
+    let status = std::process::Command::new("explorer").arg(&target).spawn();
+    #[cfg(not(windows))]
+    let status = std::process::Command::new("xdg-open").arg(&target).spawn();
+    status.map_err(|e| format!("open {}: {e}", target.display()))?;
+    Ok(target.display().to_string())
 }
 
 /// Remove an installed package (refuses while active on a faction).

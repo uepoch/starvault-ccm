@@ -47,6 +47,7 @@ pub fn run() {
             commands::read_log,
             commands::reconcile,
             commands::discover_game_exe,
+            commands::reveal_package,
             commands::remove_package,
             commands::launch_preflight,
             commands::launch_game,
