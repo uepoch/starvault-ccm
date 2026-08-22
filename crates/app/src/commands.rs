@@ -1306,3 +1306,19 @@ fn save_owner(store: &svccm_core::store::Store, slot: SlotId) -> String {
         })
         .unwrap_or_else(|| "plain".into())
 }
+
+/// Empty the operation log (and its rotated generations).
+#[tauri::command]
+pub fn clear_log(app: AppHandle) -> Result<(), String> {
+    let path = log_path(&app)?;
+    for p in [
+        path.clone(),
+        path.with_extension("jsonl.1"),
+        path.with_extension("jsonl.2"),
+    ] {
+        if p.symlink_metadata().is_ok() {
+            std::fs::remove_file(&p).map_err(|e| format!("clear {}: {e}", p.display()))?;
+        }
+    }
+    Ok(())
+}

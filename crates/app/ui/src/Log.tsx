@@ -38,6 +38,17 @@ export default function Log() {
         <Button variant="light" size="xs" onClick={refresh}>
           Refresh
         </Button>
+        <Button
+          variant="subtle"
+          color="red"
+          size="xs"
+          onClick={async () => {
+            await invoke("clear_log").catch(() => {});
+            void refresh();
+          }}
+        >
+          Clear
+        </Button>
       </Group>
 
       {entries.length === 0 ? (

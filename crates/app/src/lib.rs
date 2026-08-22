@@ -45,6 +45,7 @@ pub fn run() {
             commands::get_config,
             commands::save_config,
             commands::clear_all_data,
+            commands::clear_log,
             commands::list_campaigns,
             commands::activate_campaign,
             commands::restore_campaign,
