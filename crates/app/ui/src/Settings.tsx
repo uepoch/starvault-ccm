@@ -111,49 +111,51 @@ export default function Settings() {
 
       <Grid>
         <Grid.Col span={6}>
-          <Card withBorder>
-            <Stack gap="sm">
-              <Text fw={500}>General</Text>
-              <TextInput
-                label="StarCraft II.exe"
-                placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
-                value={gameExe}
-                onChange={(e) => setGameExe(e.currentTarget.value)}
-                error={status === "error" ? errorMsg : undefined}
-              />
-              <Group gap="xs">
-                <Button variant="light" size="xs" onClick={browse}>
-                  Browse…
-                </Button>
-                <Button
-                  variant="light"
-                  size="xs"
-                  onClick={async () => {
-                    const found = await invoke<string | null>("discover_game_exe");
-                    if (found) {
-                      setGameExe(found);
-                      notifications.show({ color: "green", message: "Found StarCraft II." });
-                    } else {
-                      notifications.show({
-                        color: "yellow",
-                        message: "Could not find an SC2 install automatically — browse for it.",
-                      });
-                    }
-                  }}
-                >
-                  Auto-detect
-                </Button>
-                {status === "saving" && (
-                  <Text size="xs" c="dimmed">
-                    Saving…
-                  </Text>
-                )}
-                {status === "saved" && (
-                  <Text size="xs" c="dimmed">
-                    Saved ✓
-                  </Text>
-                )}
-              </Group>
+          <Card withBorder h="100%">
+            <Stack gap="sm" h="100%" justify="space-between">
+              <Stack gap="sm">
+                <Text fw={500}>General</Text>
+                <TextInput
+                  label="StarCraft II.exe"
+                  placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
+                  value={gameExe}
+                  onChange={(e) => setGameExe(e.currentTarget.value)}
+                  error={status === "error" ? errorMsg : undefined}
+                />
+                <Group gap="xs">
+                  <Button variant="light" size="xs" onClick={browse}>
+                    Browse…
+                  </Button>
+                  <Button
+                    variant="light"
+                    size="xs"
+                    onClick={async () => {
+                      const found = await invoke<string | null>("discover_game_exe");
+                      if (found) {
+                        setGameExe(found);
+                        notifications.show({ color: "green", message: "Found StarCraft II." });
+                      } else {
+                        notifications.show({
+                          color: "yellow",
+                          message: "Could not find an SC2 install automatically — browse for it.",
+                        });
+                      }
+                    }}
+                  >
+                    Auto-detect
+                  </Button>
+                  {status === "saving" && (
+                    <Text size="xs" c="dimmed">
+                      Saving…
+                    </Text>
+                  )}
+                  {status === "saved" && (
+                    <Text size="xs" c="dimmed">
+                      Saved ✓
+                    </Text>
+                  )}
+                </Group>
+              </Stack>
               <Switch
                 label="Crash reports"
                 description="Opt-in. Sends crash data only; no analytics exist."
@@ -165,7 +167,7 @@ export default function Settings() {
         </Grid.Col>
 
         <Grid.Col span={6}>
-          <Card withBorder>
+          <Card withBorder h="100%">
             <Stack gap="sm">
               <Text fw={500}>Advanced</Text>
               <Select
