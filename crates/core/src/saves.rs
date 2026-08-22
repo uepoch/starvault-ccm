@@ -215,7 +215,11 @@ impl SavesManager {
         // Banks ride with the set: campaign progress (the "continue"
         // state) lives there for custom campaigns, and everything written
         // while this owner was active belongs to it.
-        for dir in SWEPT_DIRS.map(|d| self.live.join(d)).into_iter().chain([self.banks.clone()]) {
+        for dir in SWEPT_DIRS
+            .map(|d| self.live.join(d))
+            .into_iter()
+            .chain([self.banks.clone()])
+        {
             if !dir.is_dir() {
                 continue;
             }

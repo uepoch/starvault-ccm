@@ -197,11 +197,77 @@ fn sc2_running() -> bool {
 }
 
 /// Detached spawn: `<exe>` with no mutating arguments (X1).
+/// SC2 spawned without the Battle.net agent running falls back to its
+/// legacy login screen (password prompt). With the agent up, the game
+/// authenticates silently. So every launch first ensures Battle.net is
+/// running: start it if needed and wait for the agent to come up.
+/// Best-effort Battle.net startup: spawn the Battle.net client if no
+/// process is running, then wait (bounded) for it to register its agent.
+/// Best-effort on purpose - if Battle.net can't start we still spawn the
+/// game; it will show its own login as before rather than hard-failing.
+fn ensure_battlenet_running() {
+    if battlenet_running() {
+        return;
+    }
+    // Battle.net.exe lives beside the SC2 install only when sharing a
+    // parent drive layout is irrelevant - it is in its own dir; find it
+    // from the common locations.
+    let candidates = [
+        r"C:\Program Files (x86)\Battle.net\Battle.net.exe",
+        r"C:\Program Files\Battle.net\Battle.net.exe",
+        // Local per-user install (Battle.net downloader default).
+        &format!(
+            r"C:\Users\{}\AppData\Local\Battle.net\Battle.net.exe",
+            std::env::var("USERNAME").unwrap_or_default()
+        ),
+    ];
+    let Some(exe) = candidates.iter().find(|p| std::path::Path::new(p).is_file()) else {
+        return;
+    };
+    if let Err(e) = Command::new(exe).args(["--exec=launch BNA"]).spawn() {
+        eprintln!("battle.net start failed: {e}");
+        return;
+    };
+    // Wait for the agent to come up before handing control to the game.
+    for _ in 0..30 {
+        if battlenet_running() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// True when the Battle.net client (not the agent) is running.
+#[cfg(windows)]
+fn battlenet_running() -> bool {
+    Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq Battle.net.exe", "/NH"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Battle.net.exe"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn battlenet_running() -> bool {
+    std::fs::read_dir("/proc")
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.chars().all(|c| c.is_ascii_digit())
+                    && std::fs::read_to_string(e.path().join("comm"))
+                        .map(|c| c.to_lowercase().contains("battle.net"))
+                        .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
 pub fn launch(layout: &WindowsLayout) -> Result<()> {
     let exe = layout.exe();
     if !exe.is_file() {
         return Err(pkg_err(exe.display().to_string(), "executable not found"));
     }
+    ensure_battlenet_running();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

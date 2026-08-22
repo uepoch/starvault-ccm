@@ -83,7 +83,10 @@ fn swap_isolates_saves_between_owners_round_trip() {
     // The game writes new progress while the campaign is live.
     touch(&live.join("VoidCampaignSave.SC2Save"), b"campaign-progress");
     touch(&live.join("Campaign/Kerrigan Mission.SC2Save"), b"km");
-    touch(&banks.join("2-S2-1-777/plain-bank.SC2Bank"), b"campaign-bank");
+    touch(
+        &banks.join("2-S2-1-777/plain-bank.SC2Bank"),
+        b"campaign-bank",
+    );
 
     // Restore to plain: campaign saves archived, plain ones back.
     mgr.swap(SlotId::LotV, "plain", "kerrigan").unwrap();
