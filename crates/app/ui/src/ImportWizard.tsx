@@ -311,47 +311,50 @@ export default function ImportWizard({
                   <Text size="sm" fw={500}>
                     Activate on {SLOTS.find((s) => s.value === slot)?.label} now?
                   </Text>
-                  <Group>
-                    <Button
-                      loading={activating}
-                      onClick={async () => {
-                        setActivating(true);
-                        try {
-                          await invoke("activate_campaign", { slot, id: importedId });
-                          notifications.show({
-                            color: "green",
-                            message: `${importedId} activated on ${slot}.`,
-                          });
-                          onImported();
-                          reset();
-                        } catch (e) {
-                          const conflictInfo = errConflict(e);
-                          if (conflictInfo) {
-                            setConflict({
-                              info: conflictInfo,
-                              retrySlot: slot,
-                              retryId: importedId,
-                            });
-                          } else {
-                            notifications.show({
-                              color: "red",
-                              title: "Activation failed",
-                              message: errMessage(e),
-                            });
-                          }
-                        } finally {
-                          setActivating(false);
-                        }
-                      }}
-                    >
-                      Activate
-                    </Button>
-                  </Group>
                 </>
               )}
-              <Button variant="default" onClick={reset}>
-                {importedId ? "Later" : "Done"}
-              </Button>
+              <Group justify="space-between" w="100%">
+                <Button variant="default" onClick={reset} w="48%">
+                  {importedId ? "Later" : "Done"}
+                </Button>
+                {importedId && slot && (
+                  <Button
+                    w="48%"
+                    loading={activating}
+                    onClick={async () => {
+                      setActivating(true);
+                      try {
+                        await invoke("activate_campaign", { slot, id: importedId });
+                        notifications.show({
+                          color: "green",
+                          message: `${importedId} activated on ${slot}.`,
+                        });
+                        onImported();
+                        reset();
+                      } catch (e) {
+                        const conflictInfo = errConflict(e);
+                        if (conflictInfo) {
+                          setConflict({
+                            info: conflictInfo,
+                            retrySlot: slot,
+                            retryId: importedId,
+                          });
+                        } else {
+                          notifications.show({
+                            color: "red",
+                            title: "Activation failed",
+                            message: errMessage(e),
+                          });
+                        }
+                      } finally {
+                        setActivating(false);
+                      }
+                    }}
+                  >
+                    Activate
+                  </Button>
+                )}
+              </Group>
             </Stack>
           )}
         </Stack>
