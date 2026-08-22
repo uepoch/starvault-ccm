@@ -526,6 +526,7 @@ pub fn get_config(store_state: tauri::State<'_, AppState>) -> Result<ConfigDto, 
 /// Save-isolation settings appended to save_config (keeps the arg count
 /// under clippy's limit).
 #[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ConfigExtras {
     pub save_isolation: Option<bool>,
     pub saves_profile: Option<String>,
@@ -533,7 +534,6 @@ pub struct ConfigExtras {
 
 /// Persist settings; the game exe must exist when provided.
 #[tauri::command]
-
 pub async fn save_config(
     store_state: tauri::State<'_, AppState>,
     game_exe: Option<String>,
