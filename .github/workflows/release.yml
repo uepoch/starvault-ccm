@@ -18,7 +18,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           if ! grep -q "## \[${version}\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## [${version}]' entry. Add it and re-tag." 
+            echo "::error::CHANGELOG.md has no '## [${version}]' entry. Add it and re-tag."
             exit 1
           fi
 
@@ -37,24 +37,43 @@ jobs:
         working-directory: crates/app/ui
       - run: vp build
         working-directory: crates/app/ui
-      # Release build with embedded assets + updater artifacts, signed with
-      # the repo secrets.
-      - run: cargo build --release -p svccm-app --features custom-protocol
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      # NSIS installer + updater bundle via the Tauri CLI (uses the same
-      # signing env).
+      # NSIS installer + signed updater bundle via the Tauri CLI.
       - run: ui/node_modules/.bin/tauri build --no-bundle-check
         working-directory: crates/app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      # latest.json manifest for the auto-updater: names the NSIS installer,
+      # its detached signature, and the release notes.
+      - name: Compose latest.json
+        shell: pwsh
+        working-directory: crates/app
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          $nsis = Get-ChildItem "target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          $sig  = Get-ChildItem "target/release/bundle/nsis/*.exe.sig" | Select-Object -First 1
+          if (-not $nsis -or -not $sig) { throw "NSIS installer or signature missing" }
+          $sigContent = (Get-Content $sig.FullName -Raw).Trim()
+          $manifest = @{
+            version  = $version
+            notes    = "See https://github.com/uepoch/starvault-ccm/releases/tag/$env:TAG"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $sigContent
+                url = "https://github.com/uepoch/starvault-ccm/releases/download/$env:TAG/$($nsis.Name)"
+              }
+            }
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Out-File -Encoding utf8NoBOM "target/release/bundle/latest.json"
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             crates/app/target/release/bundle/nsis/*.exe
             crates/app/target/release/bundle/nsis/*.exe.sig
-            crates/app/target/release/bundle/msi/*.msi
-            crates/app/target/release/bundle/msi/*.msi.sig
+            crates/app/target/release/bundle/latest.json
           generate_release_notes: true

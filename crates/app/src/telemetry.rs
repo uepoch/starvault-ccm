@@ -17,6 +17,10 @@ static ENABLED: AtomicBool = AtomicBool::new(false);
 /// Start Sentry when the user opted in. Idempotent: `set_enabled` flips it
 /// live at runtime when the toggle changes.
 pub fn init(app: &AppHandle) {
+    // reqwest (Sentry transport + updater) lands on rustls-no-provider via
+    // the tauri dependency chain; the ring provider is compiled but must be
+    // installed as the default before any Client is built.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     if let Ok(cfg) = crate::commands::load_config(&app.state::<crate::commands::AppState>()) {
         set_enabled(cfg.crash_reports_opt_in);
     }
