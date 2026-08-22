@@ -14,7 +14,8 @@
       {
         "title": "StarVault CCM",
         "width": 1100,
-        "height": 750
+        "height": 750,
+        "dragDropEnabled": true
       }
     ],
     "security": {
