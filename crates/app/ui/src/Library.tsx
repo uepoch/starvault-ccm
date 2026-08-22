@@ -198,7 +198,7 @@ export default function Library({
           const busy = busyId === entry.id;
           return (
             <Group gap="xs" wrap="nowrap" justify="flex-end">
-              <Tooltip label={active ? "Activated" : "Activate on its faction"}>
+              <Tooltip label={active ? "Activated" : "Activate"}>
                 <Button
                   size="compact-sm"
                   variant={active ? "filled" : "default"}
