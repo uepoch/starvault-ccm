@@ -17,7 +17,10 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             commands::init_log_level(&data_dir.join("config.toml"));
             app.manage(commands::AppState {
-                store: std::sync::Arc::new(svccm_core::store::Store::open(data_dir.join("store"))?),
+                store: std::sync::Mutex::new(Some(std::sync::Arc::new(
+                    svccm_core::store::Store::open(data_dir.join("store"))?,
+                ))),
+                store_path: data_dir.join("store"),
                 import_ops: Default::default(),
                 config_cache: Default::default(),
                 campaigns_cache: Default::default(),

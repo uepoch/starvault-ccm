@@ -32,7 +32,7 @@ fn list_library_inner(
     if let Some(entries) = cached.as_ref() {
         return Ok(entries.clone());
     }
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     let entries = library::scan(&store).map_err(|e| e.to_string())?;
     *cached = Some(entries.clone());
     Ok(entries)
@@ -103,15 +103,31 @@ pub struct ImportOp {
 /// One SQLite connection for the process lifetime. Reopening the ledger
 /// per command made Defender rescan the whole database file every time.
 pub struct AppState {
-    pub store: Arc<Store>,
+    /// Shared ledger connection. Held behind an Option so Clear-all can
+    /// drop it — Windows keeps deleted-but-open files locked.
+    pub store: Mutex<Option<Arc<Store>>>,
+    pub store_path: PathBuf,
+    /// `<app-data>/config.toml`.
+    pub config_path: PathBuf,
     /// In-flight imports: extracted tree + cancel flag per operation.
     pub import_ops: Mutex<HashMap<String, ImportOp>>,
     /// Parsed config; written by save_config.
     pub config_cache: Mutex<Option<Config>>,
     /// Campaign slots; invalidated like the library cache.
     pub campaigns_cache: Mutex<Option<Vec<CampaignSlot>>>,
-    /// `<app-data>/config.toml`.
-    pub config_path: PathBuf,
+}
+
+impl AppState {
+    /// The shared store, reopening if Clear-all dropped it.
+    pub fn store(&self) -> Result<Arc<Store>, String> {
+        let mut guard = self.store.lock().expect("store poisoned");
+        if let Some(store) = guard.as_ref() {
+            return Ok(store.clone());
+        }
+        let store = Arc::new(Store::open(&self.store_path).map_err(|e| e.to_string())?);
+        *guard = Some(store.clone());
+        Ok(store)
+    }
 }
 
 /// Library scan cache; any mutation clears it so tab switches read
@@ -342,7 +358,7 @@ pub fn import_ingest(
         } else if title.is_some() || desc.is_some() {
             plan.metadata = Some(fallback_metadata(title, desc));
         }
-        let store = store_state.store.clone();
+        let store = store_state.store()?;
         let app_for_cb = app.clone();
         let op_id_for_cb = op_id.clone();
         store
@@ -394,15 +410,19 @@ pub fn import_cancel(store_state: tauri::State<'_, AppState>, op_id: String) {
 /// Wipe all app data: store, ledger, log, config. Confirmation happens in
 /// the UI; this is unrecoverable.
 #[tauri::command]
-pub fn clear_all_data(app: AppHandle) -> Result<(), String> {
+pub fn clear_all_data(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // Drop the shared ledger connection first: Windows refuses to delete
+    // files that are still open.
+    *state.store.lock().expect("store poisoned") = None;
+    *state.config_cache.lock().expect("config poisoned") = None;
+    *state.campaigns_cache.lock().expect("campaigns poisoned") = None;
+
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data dir: {e}"))?;
-    // Roaming holds everything we own: store, ledger, log, config.
     if data_dir.symlink_metadata().is_ok() {
-        std::fs::remove_dir_all(&data_dir)
-            .map_err(|e| format!("clear {}: {e}", data_dir.display()))?;
+        remove_with_retry(&data_dir)?;
     }
     // The cache dir also hosts the WebView2 browser profile, which is locked
     // while the app runs — only remove our import scratch space inside it.
@@ -412,10 +432,29 @@ pub fn clear_all_data(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("resolve cache dir: {e}"))?
         .join("import");
     if scratch.symlink_metadata().is_ok() {
-        std::fs::remove_dir_all(&scratch)
-            .map_err(|e| format!("clear {}: {e}", scratch.display()))?;
+        remove_with_retry(&scratch)?;
     }
     Ok(())
+}
+
+/// Deletion can race short-lived handles (background warm-up, AV); a few
+/// short retries absorb that.
+fn remove_with_retry(dir: &std::path::Path) -> Result<(), String> {
+    let mut last = None;
+    for attempt in 0..3 {
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                std::thread::sleep(std::time::Duration::from_millis(200 * (attempt + 1)));
+            }
+        }
+    }
+    Err(format!(
+        "clear {}: {}",
+        dir.display(),
+        last.map(|e| e.to_string()).unwrap_or_default()
+    ))
 }
 
 // --- campaigns screen --------------------------------------------------------
@@ -535,7 +574,7 @@ fn list_campaigns_inner(
     store_state: &tauri::State<'_, AppState>,
 ) -> Result<Vec<CampaignSlot>, String> {
     let started = std::time::Instant::now();
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     let t_ledger = std::time::Instant::now();
     let active_map: HashMap<String, (String, String)> = store
         .active_slots()
@@ -603,7 +642,7 @@ pub async fn activate_campaign(
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
 
     // Latest installed revision of `id`.
     let revs: Vec<String> = store
@@ -713,7 +752,7 @@ pub fn restore_campaign(
     let slot = slot_from_str(&slot)?;
     let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     if let Err(e) = SlotManager::new(&layout, &store).restore(slot) {
         log_op(&app, "error", "restore", &format!("{}: {e}", slot.as_str()));
         return Err(e.to_string());
@@ -844,7 +883,7 @@ pub async fn reconcile(
         return Ok(Vec::new()); // nothing to reconcile without a game install
     }
     let layout = layout_from_config(&cfg)?;
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     let notes = SlotManager::new(&layout, &store)
         .with_strategy(cfg.strategy_override)
         .reconcile()
@@ -869,7 +908,7 @@ pub fn launch_preflight(
 ) -> Result<PreflightReport, String> {
     let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     Ok(launch::preflight(&layout, &store))
 }
 
@@ -931,7 +970,7 @@ pub fn migrate_candidate(
         return Err(format!("not a directory: {path}"));
     }
     let plan = plan_from_extracted(&src).map_err(|e| e.to_string())?;
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     let rev = store
         .ingest_with_progress(&id, slot, &plan, |_| true)
         .map_err(|e| e.to_string())?
@@ -958,7 +997,7 @@ pub fn remove_package(
     cache: tauri::State<'_, LibraryCache>,
     id: String,
 ) -> Result<(), String> {
-    let store = store_state.store.clone();
+    let store = store_state.store()?;
     store.remove_package(&id).map_err(|e| e.to_string())?;
     log_op(&app, "info", "remove", &id);
     invalidate_library(&cache);
