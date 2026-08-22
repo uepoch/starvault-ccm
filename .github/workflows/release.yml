@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Frontend: Vite+ toolchain, then build the embedded UI.
+      - uses: voidzero-dev/setup-vp@v1.17.0
+        with:
+          cache: true
+      - run: vp install
+        working-directory: crates/app/ui
+      - run: vp build
+        working-directory: crates/app/ui
+      # Release build with embedded assets + updater artifacts, signed with
+      # the repo secrets.
+      - run: cargo build --release -p svccm-app --features custom-protocol
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # NSIS installer + updater bundle via the Tauri CLI (uses the same
+      # signing env).
+      - run: ui/node_modules/.bin/tauri build --no-bundle-check
+        working-directory: crates/app
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            crates/app/target/release/bundle/nsis/*.exe
+            crates/app/target/release/bundle/nsis/*.exe.sig
+            crates/app/target/release/bundle/msi/*.msi
+            crates/app/target/release/bundle/msi/*.msi.sig
+          generate_release_notes: true

@@ -42,12 +42,13 @@ fn utf16(bytes: &[u8], little_endian: bool) -> Result<String, std::string::FromU
         return utf16(&bytes[..bytes.len() - 1], little_endian);
     }
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
+        .chunks(2)
         .map(|c| {
+            let pair = [c[0], *c.get(1).unwrap_or(&0)];
             if little_endian {
-                u16::from_le_bytes([c[0], c[1]])
+                u16::from_le_bytes(pair)
             } else {
-                u16::from_be_bytes([c[0], c[1]])
+                u16::from_be_bytes(pair)
             }
         })
         .collect();
