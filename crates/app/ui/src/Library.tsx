@@ -30,6 +30,8 @@ import {
 } from "@tanstack/react-table";
 import ImportWizard from "./ImportWizard";
 import MigrationBanner from "./MigrationBanner";
+import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import { errConflict, errMessage } from "./errors";
 
 interface LibraryEntry {
   id: string;
@@ -61,11 +63,18 @@ function formatDate(epoch: number | null): string {
   return new Date(epoch * 1000).toISOString().slice(0, 10);
 }
 
-export default function Library() {
+export default function Library({
+  pendingZip,
+  onZipConsumed,
+}: {
+  pendingZip: string | null;
+  onZipConsumed: () => void;
+}) {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [legacy, setLegacy] = useState<LegacyCcmInstall | null>(null);
   const [removing, setRemoving] = useState<LibraryEntry | null>(null);
+  const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [factionFilter, setFactionFilter] = useState<string | null>(null);
@@ -95,7 +104,12 @@ export default function Library() {
       });
       refresh();
     } catch (e) {
-      notifications.show({ color: "red", title: "Activation failed", message: String(e) });
+      const conflictInfo = errConflict(e);
+      if (conflictInfo) {
+        setConflict({ info: conflictInfo, retrySlot: entry.slot, retryId: entry.id });
+      } else {
+        notifications.show({ color: "red", title: "Activation failed", message: errMessage(e) });
+      }
     } finally {
       setBusyId(null);
     }
@@ -206,7 +220,12 @@ export default function Library() {
     <Stack p="lg" gap="lg">
       <Group justify="space-between">
         <Title order={2}>Library</Title>
-        <ImportWizard knownIds={new Set(entries?.map((e) => e.id) ?? [])} onImported={refresh} />
+        <ImportWizard
+          knownIds={new Set(entries?.map((e) => e.id) ?? [])}
+          onImported={refresh}
+          pendingZip={pendingZip}
+          onZipConsumed={onZipConsumed}
+        />
       </Group>
 
       {legacy && (
@@ -316,6 +335,8 @@ export default function Library() {
           </Group>
         </Stack>
       </Modal>
+
+      <ConflictDialog state={conflict} onClose={() => setConflict(null)} onDone={refresh} />
     </Stack>
   );
 }

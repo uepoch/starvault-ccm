@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { MantineProvider, createTheme, Tabs } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
+import { Notifications, notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import Campaigns from "./Campaigns";
@@ -23,6 +23,7 @@ interface ConfigDto {
 
 export default function App() {
   const [tab, setTab] = useState<string | null>(null);
+  const [pendingZip, setPendingZip] = useState<string | null>(null);
 
   useEffect(() => {
     // Crash recovery, then first-run install detection.
@@ -54,8 +55,12 @@ export default function App() {
         if (event.payload.type !== "drop") return;
         const zip = event.payload.paths.find((p) => p.toLowerCase().endsWith(".zip"));
         if (!zip) return;
+        // Visible feedback: proves the drop reached the app.
+        notifications.show({ color: "blue", message: `Importing ${zip.split(/[\\/]/).pop()}…` });
         setTab("library");
-        window.dispatchEvent(new CustomEvent("import-zip", { detail: zip }));
+        // Prop, not event: Library may not be mounted yet when a drop
+        // lands from another tab.
+        setPendingZip(zip);
       })
       .then((fn) => {
         unlisten = fn;
@@ -75,7 +80,7 @@ export default function App() {
         </Tabs.List>
 
         <Tabs.Panel value="library">
-          <Library />
+          <Library pendingZip={pendingZip} onZipConsumed={() => setPendingZip(null)} />
         </Tabs.Panel>
         <Tabs.Panel value="campaigns">
           <Campaigns />

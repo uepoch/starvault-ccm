@@ -18,6 +18,8 @@ import {
   TextInput,
 } from "@mantine/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import { errConflict, errMessage } from "./errors";
 
 interface ImportPreview {
   suggested_id: string;
@@ -49,9 +51,13 @@ const SLOTS = [
 export default function ImportWizard({
   knownIds,
   onImported,
+  pendingZip,
+  onZipConsumed,
 }: {
   knownIds: Set<string>;
   onImported: () => void;
+  pendingZip: string | null;
+  onZipConsumed: () => void;
 }) {
   const [opened, setOpened] = useState(false);
   const [step, setStep] = useState(0);
@@ -67,19 +73,18 @@ export default function ImportWizard({
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [importedId, setImportedId] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
+  const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
   const opRef = useRef<string | null>(null);
   opRef.current = opId;
   const analyzeRef = useRef<((path?: string) => Promise<void>) | null>(null);
 
+  // A zip dropped anywhere in the app arrives via this prop.
   useEffect(() => {
-    // A zip dropped on any view lands here via App.tsx.
-    const onImportZip = (e: Event) => {
-      setOpened(true);
-      void analyzeRef.current?.((e as CustomEvent<string>).detail);
-    };
-    window.addEventListener("import-zip", onImportZip);
-    return () => window.removeEventListener("import-zip", onImportZip);
-  }, []);
+    if (!pendingZip) return;
+    onZipConsumed();
+    setOpened(true);
+    void startAnalyze(pendingZip);
+  }, [pendingZip, onZipConsumed]);
 
   useEffect(() => {
     const unlisten = listen<ProgressEvent>("import-progress", (event) => {
@@ -94,6 +99,7 @@ export default function ImportWizard({
 
   const reset = () => {
     setOpened(false);
+    setConflict(null);
     setStep(0);
     setOpId(null);
     setPercent(0);
@@ -320,11 +326,20 @@ export default function ImportWizard({
                           onImported();
                           reset();
                         } catch (e) {
-                          notifications.show({
-                            color: "red",
-                            title: "Activation blocked",
-                            message: String(e),
-                          });
+                          const conflictInfo = errConflict(e);
+                          if (conflictInfo) {
+                            setConflict({
+                              info: conflictInfo,
+                              retrySlot: slot,
+                              retryId: importedId,
+                            });
+                          } else {
+                            notifications.show({
+                              color: "red",
+                              title: "Activation failed",
+                              message: errMessage(e),
+                            });
+                          }
                         } finally {
                           setActivating(false);
                         }
@@ -342,6 +357,15 @@ export default function ImportWizard({
           )}
         </Stack>
       </Modal>
+
+      <ConflictDialog
+        state={conflict}
+        onClose={() => setConflict(null)}
+        onDone={() => {
+          onImported();
+          reset();
+        }}
+      />
     </>
   );
 }

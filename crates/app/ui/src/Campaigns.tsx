@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { notifications } from "@mantine/notifications";
-import { errConflict, errMessage, type ConflictInfo } from "./errors";
+import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import { errConflict, errMessage } from "./errors";
 import {
   Alert,
   Button,
@@ -119,11 +120,7 @@ export default function Campaigns() {
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [conflict, setConflict] = useState<{
-    info: ConflictInfo;
-    retrySlot: string;
-    retryId: string;
-  } | null>(null);
+  const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
 
   const refresh = () => {
     invoke<CampaignSlot[]>("list_campaigns")
@@ -233,64 +230,7 @@ export default function Campaigns() {
 
       {slots === null && !error && <Text c="dimmed">Loading…</Text>}
 
-      <Modal
-        opened={conflict !== null}
-        onClose={() => setConflict(null)}
-        title="Dependency conflict"
-        size="md"
-      >
-        <Stack gap="sm">
-          <Text size="sm">
-            Activating <b>{conflict?.retryId}</b> would clash with <b>{conflict?.info.other_id}</b>{" "}
-            (currently active on{" "}
-            {FACTION_TITLES[conflict?.info.other_slot ?? ""] ?? conflict?.info.other_slot}
-            ): both ship different content for{" "}
-            <Text span ff="monospace" size="sm">
-              {conflict?.info.target}
-            </Text>
-            {conflict && conflict.info.conflict_count > 1 && (
-              <Text size="sm" c="dimmed" mt={4}>
-                …and {conflict.info.conflict_count - 1} more file(s).
-              </Text>
-            )}
-          </Text>
-          <Group justify="flex-end">
-            <Button variant="default" onClick={() => setConflict(null)}>
-              Keep current
-            </Button>
-            <Button
-              color="orange"
-              loading={busy !== null}
-              onClick={async () => {
-                if (!conflict) return;
-                const { info, retrySlot, retryId } = conflict;
-                setBusy(`resolve-${retrySlot}`);
-                try {
-                  await invoke("restore_campaign", { slot: info.other_slot });
-                  notifications.show({
-                    color: "green",
-                    message: `${FACTION_TITLES[info.other_slot] ?? info.other_slot} restored to plain.`,
-                  });
-                  await invoke("activate_campaign", { slot: retrySlot, id: retryId });
-                  notifications.show({
-                    color: "green",
-                    message: `${retryId} activated on ${FACTION_TITLES[retrySlot] ?? retrySlot}.`,
-                  });
-                  setConflict(null);
-                  refresh();
-                } catch (e) {
-                  setError(errMessage(e));
-                  notifications.show({ color: "red", title: "Failed", message: errMessage(e) });
-                } finally {
-                  setBusy(null);
-                }
-              }}
-            >
-              Disable conflict &amp; activate
-            </Button>
-          </Group>
-        </Stack>
-      </Modal>
+      <ConflictDialog state={conflict} onClose={() => setConflict(null)} onDone={refresh} />
 
       <Modal
         opened={picking !== null}
