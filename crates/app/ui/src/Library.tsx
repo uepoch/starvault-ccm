@@ -35,6 +35,7 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from "@tanstack/react-table";
+import { FACTION_COLORS, FACTION_TITLES } from "./factions";
 import ImportWizard from "./ImportWizard";
 import MigrationBanner from "./MigrationBanner";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
@@ -55,13 +56,6 @@ interface LibraryEntry {
 interface LegacyCcmInstall {
   exe_hint: string | null;
 }
-
-const FACTION_TITLES: Record<string, string> = {
-  wol: "WoL",
-  hots: "HotS",
-  lotv: "LotV",
-  nco: "NCO",
-};
 
 const columnHelper = createColumnHelper<LibraryEntry>();
 
@@ -182,7 +176,9 @@ export default function Library({
       columnHelper.accessor("slot", {
         header: "Faction",
         cell: (info) => (
-          <Badge variant="light">{FACTION_TITLES[info.getValue()] ?? info.getValue()}</Badge>
+          <Badge variant="light" color={FACTION_COLORS[info.getValue()] ?? "gray"}>
+            {FACTION_TITLES[info.getValue()] ?? info.getValue()}
+          </Badge>
         ),
       }),
       columnHelper.accessor("imported_at", {

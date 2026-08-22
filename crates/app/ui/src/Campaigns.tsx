@@ -2,17 +2,20 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { notifications } from "@mantine/notifications";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import { FACTION_COLORS, FACTION_TITLES, FACTION_NAMES } from "./factions";
 import { errConflict, errMessage } from "./errors";
 import {
   Alert,
+  Badge,
   Button,
   Card,
-  Grid,
   Group,
   Modal,
+  ScrollArea,
   SimpleGrid,
   Stack,
   Text,
+  TextInput,
   Title,
 } from "@mantine/core";
 
@@ -114,20 +117,16 @@ interface CampaignSlot {
 interface LibraryEntry {
   id: string;
   slot: string;
+  title: string | null;
+  author: string | null;
 }
-
-const FACTION_TITLES: Record<string, string> = {
-  wol: "Wings of Liberty",
-  hots: "Heart of the Swarm",
-  lotv: "Legacy of the Void",
-  nco: "Nova Covert Ops",
-};
 
 export default function Campaigns() {
   const [slots, setSlots] = useState<CampaignSlot[] | null>(null);
   const [library, setLibrary] = useState<LibraryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState<string | null>(null);
+  const [pickQuery, setPickQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
 
@@ -186,11 +185,22 @@ export default function Campaigns() {
     }
   };
 
-  const optionsFor = (slot: string) =>
-    library.filter((e) => e.slot === slot).map((e) => ({ value: e.id, label: e.id }));
+  const pickOptionsFor = (slot: string) => {
+    const q = pickQuery.trim().toLowerCase();
+    return library
+      .filter((e) => e.slot === slot)
+      .filter(
+        (e) =>
+          !q ||
+          e.id.toLowerCase().includes(q) ||
+          (e.title ?? "").toLowerCase().includes(q) ||
+          (e.author ?? "").toLowerCase().includes(q),
+      )
+      .map((e) => ({ id: e.id, title: e.title ?? e.id, author: e.author }));
+  };
 
   return (
-    <Stack p="lg" gap="lg">
+    <Stack p="lg" gap="lg" h="calc(100vh - 50px)">
       <Title order={2}>Campaigns</Title>
 
       <LaunchControls onError={setError} />
@@ -201,11 +211,16 @@ export default function Campaigns() {
         </Alert>
       )}
 
-      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md" style={{ flex: 1 }}>
         {(slots ?? []).map((entry) => (
-          <Card key={entry.slot} withBorder shadow="sm">
+          <Card key={entry.slot} withBorder shadow="sm" h="100%">
             <Stack gap="xs">
-              <Title order={4}>{FACTION_TITLES[entry.slot] ?? entry.slot}</Title>
+              <Group justify="space-between">
+                <Title order={4}>{FACTION_NAMES[entry.slot] ?? entry.slot}</Title>
+                <Badge variant="light" color={FACTION_COLORS[entry.slot] ?? "gray"}>
+                  {FACTION_TITLES[entry.slot] ?? entry.slot}
+                </Badge>
+              </Group>
               <Text c={entry.pkg_id ? undefined : "dimmed"}>{entry.title}</Text>
               {entry.author && (
                 <Text size="xs" c="dimmed">
@@ -247,25 +262,54 @@ export default function Campaigns() {
         title={picking ? `Activate on ${FACTION_TITLES[picking]}` : ""}
         size="sm"
       >
-        <Grid>
-          {picking &&
-            optionsFor(picking).map((opt) => (
-              <Grid.Col span={12} key={opt.value}>
-                <Button
-                  variant="light"
-                  fullWidth
-                  loading={busy === `activate-${picking}`}
-                  disabled={busy !== null}
-                  onClick={() => picking && activate(picking, opt.value)}
-                >
-                  {opt.label}
-                </Button>
-              </Grid.Col>
-            ))}
-          {picking && optionsFor(picking).length === 0 && (
-            <Text c="dimmed">No packages installed. Import one first.</Text>
-          )}
-        </Grid>
+        <Stack gap="sm">
+          <TextInput
+            data-autofocus
+            placeholder="Search by title, author, id…"
+            value={pickQuery}
+            onChange={(e) => setPickQuery(e.currentTarget.value)}
+          />
+          <ScrollArea h={280} type="auto">
+            <Stack gap={4}>
+              {picking &&
+                pickOptionsFor(picking).map((opt) => (
+                  <Group
+                    key={opt.id}
+                    justify="space-between"
+                    wrap="nowrap"
+                    px="sm"
+                    py={6}
+                    style={{ borderRadius: 4 }}
+                  >
+                    <Stack gap={0} miw={0} style={{ flex: 1 }}>
+                      <Text size="sm" truncate="end">
+                        {opt.title}
+                      </Text>
+                      <Text size="xs" c="dimmed" truncate="end">
+                        {opt.author ? `${opt.author} · ` : ""}
+                        {opt.id}
+                      </Text>
+                    </Stack>
+                    <Button
+                      size="compact-sm"
+                      variant="light"
+                      color={FACTION_COLORS[picking]}
+                      loading={busy === `activate-${picking}`}
+                      disabled={busy !== null}
+                      onClick={() => picking && activate(picking, opt.id)}
+                    >
+                      Activate
+                    </Button>
+                  </Group>
+                ))}
+              {picking && pickOptionsFor(picking).length === 0 && (
+                <Text c="dimmed" size="sm" ta="center" mt="md">
+                  {pickQuery ? "No matches." : "No packages for this faction. Import one first."}
+                </Text>
+              )}
+            </Stack>
+          </ScrollArea>
+        </Stack>
       </Modal>
     </Stack>
   );

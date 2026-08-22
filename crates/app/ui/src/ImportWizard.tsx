@@ -9,7 +9,6 @@ import {
   Group,
   Modal,
   Progress,
-  SegmentedControl,
   Stack,
   Stepper,
   Text,
@@ -18,6 +17,7 @@ import {
 } from "@mantine/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import { FACTION_COLORS } from "./factions";
 import { errConflict, errMessage } from "./errors";
 
 interface ImportPreview {
@@ -268,7 +268,19 @@ export default function ImportWizard({
                   {preview.slot_guess === "unknown" &&
                     " — nothing detected, pick the one this was built for"}
                 </Text>
-                <SegmentedControl data={SLOTS} value={slot} onChange={setSlot} />
+                <Group gap="xs">
+                  {SLOTS.map((f) => (
+                    <Button
+                      key={f.value}
+                      size="xs"
+                      variant={slot === f.value ? "filled" : "default"}
+                      color={FACTION_COLORS[f.value]}
+                      onClick={() => setSlot(f.value)}
+                    >
+                      {f.label}
+                    </Button>
+                  ))}
+                </Group>
               </div>
               <Group>
                 <Button disabled={!id || !slot} onClick={startIngest}>
