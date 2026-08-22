@@ -1,7 +1,7 @@
 //! MPQ archive reading (read-only, decision M4).
 //!
 //! Backend: [`wow_mpq`](https://crates.io/crates/wow-mpq) (warcraft-rs),
-//! chosen after an empirical bake-off recorded in `docs/design/roadmap.md`:
+//! chosen after an empirical bake-off against a real SC2 packed container:
 //!
 //! - msierks/mpq: rejected. v1-only headers ("ToDo: Header v3 and v4"), no
 //!   HET/BET, enumeration only via an optional `(listfile)` member.

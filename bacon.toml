@@ -9,7 +9,7 @@
 #
 # The clippy job writes the full cargo JSON diagnostic stream to
 # target/bacon/clippy.json on every pass. Agents: READ that file instead of
-# re-running cargo — see AGENTS.md.
+# re-running cargo.
 
 [jobs.clippy]
 command = [

@@ -22,3 +22,10 @@ crates/app/gen/
 crates/app/ui/dist/
 crates/app/icons/android/
 crates/app/icons/ios/
+
+# Private working docs — kept locally, never published
+/docs/decisions.md
+/docs/handoff.md
+/docs/design/roadmap.md
+/AGENTS.md
+/.pi/

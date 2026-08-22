@@ -10,23 +10,23 @@ against the real machine (WSL //mnt/c) plus web sources.
 ## Summary
 No registry key or config value is documented to carry the numeric SC2 account ID; the numeric ID exists offline only as the `Accounts\<id>` directory name itself. Login emails are recoverable but don't map to numeric IDs. Recommendation: select the saves tree by directory enumeration + recency heuristic, not by "detecting the logged-in account".
 
-## What I found on THIS machine (Martin)
-- `%APPDATA%\Battle.net\Battle.net.config` (read in full): `Client.SavedAccountNames = "hornebaback@gmail.com,thesupermouk@gmail.com"` — TWO saved logins; `Client.AutoLogin = "true"`; exactly one per-account key `"5a61123b37cafce1"` (opaque local hash, not a documented account UID) with `Services.LastLoginRegion = "EU"`; `Games.s2.LastPlayed = 1787398938` (~Aug 2026, recent) and `s2_ptr` also present.
-- `Documents\StarCraft II\Variables.txt`: `LastAccountName=HORNEBABACK@GMAIL.COM`, `accountCountry=FRA`, campaign progress (`completedCampaignMask=27`). Email only — no numeric ID anywhere in the file.
+## What was found on the test machine (anonymized)
+- `%APPDATA%\Battle.net\Battle.net.config` (read in full): `Client.SavedAccountNames = "<email-a>,<email-b> [redacted]"` — TWO saved logins; `Client.AutoLogin = "true"`; exactly one per-account key `"<opaque-hash>"` (opaque local hash, not a documented account UID) with `Services.LastLoginRegion = "EU"`; `Games.s2.LastPlayed = 1787398938` (~Aug 2026, recent) and `s2_ptr` also present.
+- `Documents\StarCraft II\Variables.txt`: `LastAccountName=<EMAIL-A> [redacted]`, `accountCountry=<redacted>`, campaign progress (`completedCampaignMask=27`). Email only — no numeric ID anywhere in the file.
 - `C:\ProgramData\Battle.net\Agent\product.db` (SQLite, read as text): Agent 2.40.3.9700, region `eu`, geoip `FR`. No account ID in readable strings. `Agent.log` is NOT at `ProgramData\Battle.net\Agent\Agent.log`; real layout is `Agent\Agent.<build>\Logs\Agent-<timestamp>.log` — unguessable without dir listing.
-- `Documents\StarCraft II\Accounts\` exists (probe confirms dir) but this subagent has no shell/glob tool, so numeric dirs could NOT be enumerated. Registry via `reg.exe` interop: NOT RUN, same reason — parent should run: `"/mnt/c/Windows/System32/reg.exe" query "HKCU\Software\Blizzard Entertainment" /s` and `ls "/mnt/c/Users/Martin/Documents/StarCraft II/Accounts"`.
+- `Documents\StarCraft II\Accounts\` exists (probe confirms dir) but this subagent has no shell/glob tool, so numeric dirs could NOT be enumerated. Registry via `reg.exe` interop: NOT RUN, same reason — parent should run: `"/mnt/c/Windows/System32/reg.exe" query "HKCU\Software\Blizzard Entertainment" /s` and `ls "~/Documents/StarCraft II/Accounts"`.
 - Web: no documented Blizzard registry key carries the account ID (`HKCU\...\Battle.net\S2` historically held license data only). `SavedAccountNames` is what account-switcher tooling (TcNo-Acc-Switcher) treats as the local account identity. LAST_USED-style values are stale-able implementation details; Blizzard's supported ID source is OAuth, not local files.
 
 ## Ranked detection methods
 1. **Enumerate `Accounts\*` dirs having `*\Saves` — RECOMMENDED.** Exactly one → use it. Several → newest mtime under `Saves`, user-overridable. Works with game and Battle.net fully closed; zero dependency on Blizzard internals.
-2. **`Variables.txt` `LastAccountName`** — identifies which email last ran SC2 (here: hornebaback). Good for labeling/confirming a pick; cannot produce the numeric ID.
+2. **`Variables.txt` `LastAccountName`** — identifies which email last ran SC2 (here: <email-a>). Good for labeling/confirming a pick; cannot produce the numeric ID.
 3. **`Battle.net.config` `SavedAccountNames`** — count of saved logins (2 here) warns multiple account dirs may exist. No numeric IDs.
 4. **Agent/bnet client logs** — contain account IDs but timestamped filenames, undocumented format, brittle. Skip.
 5. **Registry** — nothing documented carries the ID. Skip.
 6. **Battle.net OAuth** — authoritative account ID, absurd for choosing a local saves dir. Skip.
 
 ## Is "exactly one dir, else dormant" sane?
-Mostly. Single account + single region is the common case, and 0 dirs correctly means dormant. But multiple dirs are routine: region switches create additional regional IDs, family/shared PCs have second accounts — this machine has 2 saved logins (though only one per-account client key, so thesupermouk likely never ran SC2 logged in here — unverified). Better gate: dormant on 0; on >1 auto-pick newest `Saves` mtime with a one-time user override. Never merge/delete account dirs (confirmed normal Blizzard behavior, separate saves/banks per region).
+Mostly. Single account + single region is the common case, and 0 dirs correctly means dormant. But multiple dirs are routine: region switches create additional regional IDs, family/shared PCs have second accounts — this machine has 2 saved logins (though only one per-account client key, so the second login likely never ran SC2 logged in here — unverified). Better gate: dormant on 0; on >1 auto-pick newest `Saves` mtime with a one-time user override. Never merge/delete account dirs (confirmed normal Blizzard behavior, separate saves/banks per region).
 
 ## Gaps
 - Numeric dirs on this machine not enumerated (no shell tool in this subagent); registry unverified for the same reason.
@@ -72,8 +72,8 @@ are all cheaply mitigable. Best case is still Blizzard's own advice: exclude
    [MS Support: delete files; restore your OneDrive]
 
 ## Local check (this machine)
-- /mnt/c/Users/Martin/Documents/StarCraft II/variables.txt — EXISTS, live SC2 data.
-- /mnt/c/Users/Martin/OneDrive/Documents/StarCraft II/variables.txt — ENOENT.
+- ~/Documents/StarCraft II/variables.txt — EXISTS, live SC2 data.
+- ~/OneDrive/Documents/StarCraft II/variables.txt — ENOENT.
 → Documents is NOT OneDrive-redirected here (KFM off); OneDrive risk is currently
   theoretical for this user. No shell in session: ls/du not run; existence probes used.
 
