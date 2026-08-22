@@ -84,10 +84,14 @@ Consequences:
   refuses them with a map-mismatch error. This is accepted behavior,
   matching old CCM: no warning is shown (players have always lived with
   it), but it is documented here.
-- Future idea (deferred): save-set isolation by junctioning per-campaign
-  save directories under `Documents\StarCraft II\Accounts\<hash>\Saves\`.
-  Complications: variable account hashes, OneDrive redirection, live game
-  handles. Revisit only if players ask.
+- Future idea (deferred): save-set isolation — see
+  `docs/design/research-save-isolation.md`. Key correction from research:
+  saves are **not** per-campaign directories; they are flat files named by
+  campaign ID (`LibertyCampaignSave.SC2Save`, …) directly under
+  `Accounts\<acct>\<profile>\Saves\`. Isolation therefore means
+  junctioning the whole `Saves` directory per faction slot, seeded from
+  live data on first activation, with OneDrive/multi-account detection at
+  discovery time. Revisit only if players ask.
 
 ## Performance notes
 
