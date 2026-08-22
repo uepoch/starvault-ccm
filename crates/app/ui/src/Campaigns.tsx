@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   Group,
+  Loader,
   Modal,
   ScrollArea,
   SimpleGrid,
@@ -263,6 +264,11 @@ export default function Campaigns() {
         size="sm"
       >
         <Stack gap="sm">
+          <style>{`
+            .svccm-pick-row:hover {
+              background: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6));
+            }
+          `}</style>
           <TextInput
             data-autofocus
             placeholder="Search by title, author, id…"
@@ -279,7 +285,13 @@ export default function Campaigns() {
                     wrap="nowrap"
                     px="sm"
                     py={6}
-                    style={{ borderRadius: 4 }}
+                    style={{
+                      borderRadius: 4,
+                      cursor: busy !== null ? "wait" : "pointer",
+                      opacity: busy !== null ? 0.6 : 1,
+                    }}
+                    className="svccm-pick-row"
+                    onClick={() => picking && busy === null && activate(picking, opt.id)}
                   >
                     <Stack gap={0} miw={0} style={{ flex: 1 }}>
                       <Text size="sm" truncate="end">
@@ -290,16 +302,9 @@ export default function Campaigns() {
                         {opt.id}
                       </Text>
                     </Stack>
-                    <Button
-                      size="compact-sm"
-                      variant="light"
-                      color={FACTION_COLORS[picking]}
-                      loading={busy === `activate-${picking}`}
-                      disabled={busy !== null}
-                      onClick={() => picking && activate(picking, opt.id)}
-                    >
-                      Activate
-                    </Button>
+                    {busy === `activate-${picking}` ? (
+                      <Loader size="xs" color={FACTION_COLORS[picking]} />
+                    ) : null}
                   </Group>
                 ))}
               {picking && pickOptionsFor(picking).length === 0 && (
