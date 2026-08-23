@@ -69,7 +69,6 @@ export default function ImportWizard({
   const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
   const opRef = useRef<string | null>(null);
   opRef.current = opId;
-  const analyzeRef = useRef<((path?: string) => Promise<void>) | null>(null);
 
   // A zip dropped anywhere in the app arrives via this prop.
   useEffect(() => {
@@ -131,8 +130,6 @@ export default function ImportWizard({
       setError(String(e));
     }
   };
-
-  analyzeRef.current = startAnalyze;
 
   const startIngest = async () => {
     if (!opId || !id || !slot) return;

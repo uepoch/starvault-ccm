@@ -31,6 +31,7 @@ export default function MigrationBanner({ onMigrated }: { onMigrated: () => void
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
+    if (!id) return; // nothing slugifiable in the name
     try {
       await invoke("migrate_candidate", { path: candidate.path, id, slot });
       setDone((d) => [...d, candidate.path]);

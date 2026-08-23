@@ -24,8 +24,12 @@ function formatTime(epochSecs: string): string {
 
 export default function Log() {
   const [entries, setEntries] = useState<LogEntry[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  const refresh = () => invoke<LogEntry[]>("read_log", { limit: 500 }).then(setEntries);
+  const refresh = () =>
+    invoke<LogEntry[]>("read_log", { limit: 500 })
+      .then(setEntries)
+      .catch((e) => setError(String(e)));
 
   useEffect(() => {
     void refresh();
@@ -51,6 +55,7 @@ export default function Log() {
         </Button>
       </Group>
 
+      {error && <Text c="red">{error}</Text>}
       {entries.length === 0 ? (
         <Text c="dimmed">No operations yet. Imports and switches appear here.</Text>
       ) : (

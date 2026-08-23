@@ -37,7 +37,7 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from "@tanstack/react-table";
-import { FACTION_COLORS, FACTION_TITLES } from "./factions";
+import { FACTION_COLORS, FACTION_TITLES, SLOTS } from "./factions";
 import ImportWizard from "./ImportWizard";
 import MigrationBanner from "./MigrationBanner";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
@@ -364,12 +364,7 @@ export default function Library({
         <Select
           placeholder="Faction"
           clearable
-          data={[
-            { value: "wol", label: "WoL" },
-            { value: "hots", label: "HotS" },
-            { value: "lotv", label: "LotV" },
-            { value: "nco", label: "NCO" },
-          ]}
+          data={SLOTS}
           value={factionFilter}
           onChange={setFactionFilter}
           w={140}
