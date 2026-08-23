@@ -90,16 +90,19 @@ fn swap_isolates_saves_between_owners_round_trip() {
 
     // Restore to plain: campaign saves archived, plain ones back.
     mgr.swap(SlotId::LotV, "plain", "kerrigan").unwrap();
-    assert_eq!(
-        std::fs::read(live.join("VoidCampaignSave.SC2Save")).unwrap(),
-        b"plain-progress"
-    );
+    assert!(live.join("VoidCampaignSave.SC2Save").is_file());
     assert!(live.join("Campaign/For the Swarm.SC2Save").is_file());
     assert!(!live.join("Campaign/Kerrigan Mission.SC2Save").exists());
+    // Root saves are vanilla-owned: whatever they held while the campaign
+    // ran rides with the plain set (live wins), never the campaign's —
+    // a campaign set cannot grow a Continue state it did not earn.
     assert_eq!(
-        std::fs::read(store.join("saves/lotv-kerrigan/VoidCampaignSave.SC2Save")).unwrap(),
+        std::fs::read(store.join("saves/lotv-plain/VoidCampaignSave.SC2Save")).unwrap(),
         b"campaign-progress"
     );
+    assert!(!store
+        .join("saves/lotv-kerrigan/VoidCampaignSave.SC2Save")
+        .exists());
     assert!(store
         .join("saves/lotv-kerrigan/Campaign/Kerrigan Mission.SC2Save")
         .is_file());

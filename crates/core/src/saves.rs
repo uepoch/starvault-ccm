@@ -220,12 +220,20 @@ impl SavesManager {
         }
         let mut moved = 0;
         let mut touched = false;
+        // Faction root saves are the vanilla campaign's fixed-name files;
+        // custom campaigns keep their progress in banks and in-mission
+        // saves (verified against full custom-campaign sessions: the root
+        // files' mtimes never move). Routing them to the plain set — never
+        // the displaced campaign's — means a campaign set can never grow
+        // a Continue state it did not earn, no matter what a failed or
+        // retried activation left in live.
+        let vanilla_dir = self.set_dir(slot, "plain");
         for file in self.live_files(slot) {
             if !touched {
-                std::fs::create_dir_all(set_dir)?;
+                std::fs::create_dir_all(&vanilla_dir)?;
                 touched = true;
             }
-            let dest = set_dir.join(file.file_name().expect("save has a name"));
+            let dest = vanilla_dir.join(file.file_name().expect("save has a name"));
             if dest.symlink_metadata().is_ok() {
                 std::fs::remove_file(&dest)?;
             }
@@ -243,10 +251,7 @@ impl SavesManager {
             if !dir.is_dir() {
                 continue;
             }
-            if !touched {
-                std::fs::create_dir_all(set_dir)?;
-                touched = true;
-            }
+            std::fs::create_dir_all(set_dir)?;
             let dest = set_dir.join(dir.file_name().expect("swept dir has a name"));
             if dest.symlink_metadata().is_ok() {
                 std::fs::remove_dir_all(&dest)?;
