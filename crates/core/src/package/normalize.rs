@@ -1,7 +1,7 @@
 //! Package normalization: arbitrary layouts → canonical form.
 //!
 //! Canonical form splits every package into two subtrees (decision M2):
-//! - `slot/<name>.SC2Map/…` — what a campaign slot receives
+//! - `slot/<logical path>/…` — paths relative to the selected faction slot
 //! - `mods/<relative path>/…` — what mirrors into the game's `Mods\`,
 //!   nesting preserved (`Mods/SCORE/X.SC2Mod` stays nested; the case old
 //!   CCM broke)
@@ -132,7 +132,11 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
                 format!(
                     "{}/{}",
                     canonical_container_target(container, *is_map, &wrapper),
-                    rel_inside.to_string_lossy()
+                    rel_inside
+                        .components()
+                        .map(|component| component.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/")
                 )
             }
             None => match container_kind(file) {
@@ -141,7 +145,8 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
                 // the zip put it. Packed MAPS keep the loose-file rule —
                 // subfolders under the slot are load-bearing (evolution/…).
                 Some(false) => canonical_container_target(file, false, &wrapper),
-                _ => {
+                Some(true) => canonical_container_target(file, true, &wrapper),
+                None => {
                     let rel = file.strip_prefix(&wrapper).unwrap_or(file);
                     map_loose_path(rel)
                 }
@@ -223,34 +228,19 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
 
 /// Canonical target directory for a container, case-preserving.
 ///
-/// - under `Mods/` prefix → `mods/<relative path>` (nesting preserved, M2)
-/// - map outside Mods    → `slot/<basename>`
+/// - beneath a `Mods/` component → `mods/<relative path>` (nesting preserved)
+/// - map outside Mods → `slot/<logical path>` after known install prefixes
+///   and archive wrappers have been stripped
 /// - mod outside Mods    → `mods/<basename>` (legacy CCM contract: maps
 ///   reference these at the Mods root)
 fn canonical_container_target(container: &Path, is_map: bool, wrapper: &Path) -> String {
-    // Accepted asymmetry: directory MAP containers flatten to
-    // `slot/<basename>` (the legacy CCM contract — the game's campaign
-    // launcher addresses dir-form maps at the slot root, proven by the
-    // game-mirror acceptance run), while PACKED map files keep their
-    // wrapper-relative subfolder via the loose-file rule (Swarm Reborn's
-    // `evolution/` subfolder is load-bearing). Same package packed vs
-    // unpacked can therefore normalize differently; both forms work
-    // because each resolves the way its form is referenced.
     let rel = container.strip_prefix(wrapper).unwrap_or(container);
-    let starts_with_mods = rel
-        .components()
-        .next()
-        .is_some_and(|c| c.as_os_str().eq_ignore_ascii_case("mods"));
-    if starts_with_mods {
-        let rest = rel
-            .components()
-            .skip(1)
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
+    if let Some(rest) = path_beneath_component(rel, "mods") {
         format!("mods/{rest}")
     } else if is_map {
-        format!("slot/{}", basename_string(container))
+        let logical_root = explicit_game_slot_root_for_path(container).unwrap_or(wrapper);
+        let logical = container.strip_prefix(logical_root).unwrap_or(rel);
+        format!("slot/{}", logical_slot_path(logical))
     } else {
         format!("mods/{}", basename_string(container))
     }
@@ -258,27 +248,64 @@ fn canonical_container_target(container: &Path, is_map: bool, wrapper: &Path) ->
 
 /// Canonical target for a loose file (no owning container), case-preserving.
 fn map_loose_path(rel: &Path) -> String {
-    let first = rel
-        .components()
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase());
-    if first.as_deref() == Some("mods") {
-        let rest = rel
-            .components()
-            .skip(1)
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/");
+    if let Some(rest) = path_beneath_component(rel, "mods") {
         return format!("mods/{rest}");
     }
     // Everything else travels with the slot (readmes, Name files, …).
-    format!(
-        "slot/{}",
-        rel.components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
-            .join("/")
-    )
+    format!("slot/{}", logical_slot_path(rel))
+}
+
+/// Return the path after the first named component. Community archives often
+/// put `Mods` below one or more presentation wrappers, while map references
+/// still address everything below that component from the game's Mods root.
+fn path_beneath_component(path: &Path, expected: &str) -> Option<String> {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let index = components
+        .iter()
+        .position(|component| component.eq_ignore_ascii_case(expected))?;
+    let rest = components.get(index + 1..)?.join("/");
+    (!rest.is_empty()).then_some(rest)
+}
+
+/// Strip paths that describe the SC2 installation rather than the logical
+/// campaign layout. The remaining subfolders are preserved because maps can
+/// reference siblings such as `evolution/zchar01.SC2Map` by relative path.
+fn logical_slot_path(path: &Path) -> String {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut start = 0;
+
+    if let Some(maps) = components
+        .iter()
+        .position(|component| component.eq_ignore_ascii_case("maps"))
+    {
+        start = maps + 1;
+    }
+    if components
+        .get(start)
+        .is_some_and(|component| component.eq_ignore_ascii_case("campaign"))
+    {
+        start += 1;
+    }
+    if components.get(start).is_some_and(|component| {
+        ["swarm", "void", "voidprologue", "nova"]
+            .iter()
+            .any(|slot| component.eq_ignore_ascii_case(slot))
+    }) {
+        start += 1;
+    }
+
+    let logical = components[start..].join("/");
+    if logical.is_empty() {
+        basename_string(path)
+    } else {
+        logical
+    }
 }
 
 fn basename_string(path: &Path) -> String {
@@ -400,6 +427,36 @@ fn common_container_parent(containers: &BTreeMap<PathBuf, bool>) -> PathBuf {
         common.pop();
     }
     common.iter().collect()
+}
+
+/// Prefer an explicit `Maps/Campaign[/faction]` root over the common parent of
+/// the discovered containers. Otherwise an archive containing only
+/// `void/chapter/*.SC2Map` would mistake `chapter` for disposable wrapping and
+/// erase a path that maps may reference.
+fn explicit_game_slot_root_for_path(path: &Path) -> Option<&Path> {
+    let mut ancestor = path.parent();
+    while let Some(candidate) = ancestor {
+        let name = candidate.file_name()?.to_string_lossy();
+        let parent = candidate.parent();
+        if ["swarm", "void", "voidprologue", "nova"]
+            .iter()
+            .any(|slot| name.eq_ignore_ascii_case(slot))
+            && parent
+                .and_then(Path::file_name)
+                .is_some_and(|value| value.eq_ignore_ascii_case("campaign"))
+        {
+            return Some(candidate);
+        }
+        if name.eq_ignore_ascii_case("campaign")
+            && parent
+                .and_then(Path::file_name)
+                .is_some_and(|value| value.eq_ignore_ascii_case("maps"))
+        {
+            return Some(candidate);
+        }
+        ancestor = parent;
+    }
+    None
 }
 
 fn validate_reference(

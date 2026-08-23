@@ -11,7 +11,7 @@ use crate::contracts::ActiveCampaign;
 use crate::error::{package_err, Result};
 use crate::layout::SlotId;
 
-pub const JOURNAL_VERSION: u32 = 4;
+pub const JOURNAL_VERSION: u32 = 5;
 pub const JOURNAL_FILE: &str = "pending-operation.json";
 const MAX_JOURNAL_BYTES: u64 = 1024 * 1024;
 
@@ -73,7 +73,7 @@ pub struct OperationPaths {
     /// merely by changing an operation sidecar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub save_recovery_proof: Option<SaveRecoveryProof>,
-    /// One entry for a same-faction swap, two for a cross-faction swap.
+    /// Exactly one entry for the global `Maps/Campaign` root.
     #[serde(default, skip_serializing_if = "SlotOperationJournal::is_empty")]
     pub slots: SlotOperationJournal,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -114,8 +114,8 @@ pub struct SlotOperationPaths {
     pub backup: PathBuf,
 }
 
-/// Slot paths plus the actual previous and target object identities captured
-/// before the journal advances to `prepared`.
+/// Campaign-root paths plus the actual previous and target object identities
+/// captured before the journal advances to `prepared`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlotOperationJournal {

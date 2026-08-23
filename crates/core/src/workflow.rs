@@ -56,6 +56,7 @@ pub struct Workflow<'a> {
     saves: Option<SavesManager>,
     save_isolation_expected: bool,
     running_probe: Arc<dyn Fn() -> bool + Send + Sync>,
+    verification_probe: Option<Arc<dyn Fn() + Send + Sync>>,
     rollback_pre_mutation_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     fail_after: Option<FailurePoint>,
 }
@@ -69,6 +70,7 @@ impl<'a> Workflow<'a> {
             saves: None,
             save_isolation_expected: false,
             running_probe: Arc::new(crate::launch::sc2_running),
+            verification_probe: None,
             rollback_pre_mutation_hook: None,
             fail_after: None,
         }
@@ -96,6 +98,13 @@ impl<'a> Workflow<'a> {
     #[doc(hidden)]
     pub fn with_running_probe(mut self, probe: impl Fn() -> bool + Send + Sync + 'static) -> Self {
         self.running_probe = Arc::new(probe);
+        self
+    }
+
+    /// Test observer invoked once for every complete live deployment verification.
+    #[doc(hidden)]
+    pub fn with_verification_probe(mut self, probe: impl Fn() + Send + Sync + 'static) -> Self {
+        self.verification_probe = Some(Arc::new(probe));
         self
     }
 
@@ -144,7 +153,7 @@ impl<'a> Workflow<'a> {
 
     pub fn library_snapshot(&self) -> Result<LibrarySnapshot> {
         let mut snapshot = crate::library::scan(self.store)?;
-        let workflow_health = self.health();
+        let workflow_health = self.cached_health().unwrap_or_else(|| self.health());
         if workflow_health.state == HealthState::RecoveryRequired {
             snapshot.health.state = HealthState::RecoveryRequired;
         } else if workflow_health.state == HealthState::Drifted
@@ -167,6 +176,12 @@ impl<'a> Workflow<'a> {
     /// Verify the committed campaign and owned filesystem resources without
     /// changing them.
     pub fn health(&self) -> Health {
+        let health = self.compute_health();
+        self.cache_health(health.clone());
+        health
+    }
+
+    fn compute_health(&self) -> Health {
         match PendingOperation::load(self.store.root()) {
             Ok(Some(_)) => {
                 return Health {
@@ -205,6 +220,27 @@ impl<'a> Workflow<'a> {
         }
     }
 
+    fn cached_health(&self) -> Option<Health> {
+        self.store.cached_workflow_health(
+            self.layout.root(),
+            self.save_isolation_expected,
+            self.saves.is_some(),
+        )
+    }
+
+    fn cache_health(&self, health: Health) {
+        self.store.cache_workflow_health(
+            self.layout.root(),
+            self.save_isolation_expected,
+            self.saves.is_some(),
+            health,
+        );
+    }
+
+    fn cache_ready(&self) {
+        self.cache_health(Health::default());
+    }
+
     /// Preflight an installed target, or the currently active campaign when
     /// `package_id` is `None`.
     pub fn preflight(&self, package_id: Option<&PackageId>) -> Result<Health> {
@@ -241,7 +277,7 @@ impl<'a> Workflow<'a> {
             .filter(|active| &active.id == package_id)
         {
             self.campaign_manifest(&active)?;
-            self.verify_state(Some(&active)).map_err(|error| {
+            self.verify_state_ready(Some(&active)).map_err(|error| {
                 package_err(
                     "active_campaign_drifted",
                     format!("the active campaign needs repair: {}", error),
@@ -259,7 +295,7 @@ impl<'a> Workflow<'a> {
     pub fn restore_vanilla(&self) -> Result<()> {
         self.ensure_mutation_ready()?;
         if self.store.active_campaign()?.is_none() {
-            self.verify_state(None)?;
+            self.verify_state_ready(None)?;
             return Ok(());
         }
         self.transition(OperationKind::Restore, None)
@@ -276,7 +312,7 @@ impl<'a> Workflow<'a> {
                 "there is no active campaign to repair",
             )
         })?;
-        if self.verify_state(Some(&active)).is_ok() {
+        if self.verify_state_ready(Some(&active)).is_ok() {
             return Ok(());
         }
         let manifest = self.verified_package_manifest(&active)?;
@@ -373,6 +409,7 @@ impl<'a> Workflow<'a> {
 
     fn ensure_mutation_ready(&self) -> Result<()> {
         self.ensure_mutation_checkpoint()?;
+        self.store.invalidate_workflow_health();
         if PendingOperation::load(self.store.root())?.is_some() {
             self.recover_pending()?;
         }
@@ -762,7 +799,6 @@ impl<'a> Workflow<'a> {
     }
 
     fn finish_committed(&self, journal: &PendingOperation) -> Result<()> {
-        self.verify_state(journal.target_campaign.as_ref())?;
         let saves = self.recover_saves(journal)?;
         let mods_backup = required_path(&journal.paths.mods_backup, "Mods backup")?;
         let mods_staging = required_path(&journal.paths.mods_staging, "Mods staging")?;
@@ -771,6 +807,9 @@ impl<'a> Workflow<'a> {
             .mods_plan_sha256
             .as_deref()
             .ok_or_else(|| invalid_journal("missing Mods plan digest"))?;
+        if let Some(saves) = &saves {
+            saves.verify_finalize_ready()?;
+        }
         slots::verify_finalize_bound_paths(&journal.paths.slots)?;
         mods::verify_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
         if let Some(saves) = &saves {
@@ -778,9 +817,16 @@ impl<'a> Workflow<'a> {
             saves.finalize()?;
         }
         self.ensure_mutation_checkpoint()?;
-        slots::finalize_bound_paths(&journal.paths.slots)?;
+        slots::commit_paths(
+            &journal.paths.slots,
+            journal.previous_campaign.is_some(),
+            journal.target_campaign.is_some(),
+        )?;
+        self.verify_state_ready(journal.target_campaign.as_ref())?;
         self.ensure_mutation_checkpoint()?;
-        mods::finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
+        slots::finalize_preverified_paths(&journal.paths.slots)?;
+        self.ensure_mutation_checkpoint()?;
+        mods::finalize_preverified_paths(mods_backup, mods_staging)?;
         self.ensure_mutation_checkpoint()?;
         PendingOperation::remove_expected(self.store.root(), journal)?;
         if let Some(saves) = saves {
@@ -857,7 +903,7 @@ impl<'a> Workflow<'a> {
             mods_plan_sha256,
         )?;
         if journal.kind != OperationKind::Repair {
-            self.verify_state(journal.previous_campaign.as_ref())?;
+            self.verify_state_ready(journal.previous_campaign.as_ref())?;
         }
         let mut verified = journal.clone();
         self.ensure_mutation_checkpoint()?;
@@ -881,9 +927,9 @@ impl<'a> Workflow<'a> {
             saves.rollback()?;
         }
         self.ensure_mutation_checkpoint()?;
-        slots::finalize_bound_paths(&journal.paths.slots)?;
+        slots::finalize_preverified_paths(&journal.paths.slots)?;
         self.ensure_mutation_checkpoint()?;
-        mods::finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
+        mods::finalize_preverified_paths(mods_backup, mods_staging)?;
         self.ensure_mutation_checkpoint()?;
         PendingOperation::remove_expected(self.store.root(), journal)
     }
@@ -1074,6 +1120,9 @@ impl<'a> Workflow<'a> {
     }
 
     fn verify_state(&self, expected: Option<&ActiveCampaign>) -> Result<()> {
+        if let Some(probe) = &self.verification_probe {
+            probe();
+        }
         if expected.is_some() || self.layout.root().symlink_metadata().is_ok() {
             self.layout.validate_mutation_roots()?;
         }
@@ -1109,6 +1158,12 @@ impl<'a> Workflow<'a> {
                 .verify_managed_mods_manifest(manifest, &managed)?;
         }
         mods::verify_managed(&self.layout.mods_dir(), &managed)
+    }
+
+    fn verify_state_ready(&self, expected: Option<&ActiveCampaign>) -> Result<()> {
+        self.verify_state(expected)?;
+        self.cache_ready();
+        Ok(())
     }
 
     fn fail(&self, point: FailurePoint) -> Result<()> {
@@ -1154,27 +1209,17 @@ fn expected_slot_paths(
     target: Option<&ActiveCampaign>,
     operation_id: &str,
 ) -> Vec<SlotOperationPaths> {
-    let mut factions = Vec::new();
-    if let Some(previous) = previous {
-        factions.push(previous.faction);
-    }
-    if let Some(target) = target {
-        if !factions.contains(&target.faction) {
-            factions.push(target.faction);
-        }
-    }
-    factions
-        .into_iter()
-        .map(|faction| {
-            let live = layout.slot_dir(faction);
-            SlotOperationPaths {
-                staging: sibling_path(&live, "staging", operation_id),
-                backup: sibling_path(&live, "backup", operation_id),
-                live,
-                faction,
-            }
-        })
-        .collect()
+    let faction = target
+        .map(|campaign| campaign.faction)
+        .or_else(|| previous.map(|campaign| campaign.faction))
+        .unwrap_or(crate::layout::SlotId::Wol);
+    let live = layout.campaign_dir();
+    vec![SlotOperationPaths {
+        staging: sibling_path(&live, "staging", operation_id),
+        backup: sibling_path(&live, "backup", operation_id),
+        live,
+        faction,
+    }]
 }
 
 fn sibling_path(path: &Path, kind: &str, operation_id: &str) -> PathBuf {

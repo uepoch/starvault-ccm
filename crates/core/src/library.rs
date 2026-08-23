@@ -128,8 +128,8 @@ impl MigrationCandidate {
     }
 }
 
-/// Custom campaign dirs in `Maps\Campaign` that are not one of the four
-/// slots' own locations — i.e. what an old CCM install deployed there.
+/// Custom campaign dirs in `Maps\Campaign` that are not reserved faction
+/// override directories — i.e. what an old CCM install deployed there.
 pub fn migration_candidates(layout: &WindowsLayout) -> Vec<MigrationCandidate> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(layout.slot_dir(crate::layout::SlotId::Wol)) else {

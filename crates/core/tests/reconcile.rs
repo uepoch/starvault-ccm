@@ -85,7 +85,7 @@ fn wol_rollback_rejects_a_linked_backup_before_external_mutation() {
     create_directory_link(&external, &paths[0].backup);
 
     let error = rollback_paths_checked(&paths, None, Some(&manifest)).unwrap_err();
-    assert_eq!(error.code(), "unsafe_slot_artifact");
+    assert_eq!(error.code(), "slot_drift");
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"outside");
     assert!(layout
         .slot_dir(SlotId::Wol)

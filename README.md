@@ -29,6 +29,13 @@ rolls an uncommitted operation back to the previous campaign; a ledger-committed
 operation is verified and finalized. If it cannot prove either state, it
 preserves the recovery files and blocks further mutations.
 
+Campaign maps are exposed through one junction at `Maps\Campaign`, regardless
+of faction. StarVault builds a synthetic override tree, placing package maps at
+the root for Wings of Liberty or below `swarm\`, `void\`, or `nova\` for the
+other campaigns. Official maps remain in the game's archives and are never
+copied. Any loose override tree that existed before activation is preserved
+intact and restored by Return to vanilla.
+
 StarVault also tracks files it manages in `Mods\`. A matching external file is
 borrowed and left in place on restore. A file created by StarVault is removed
 only while its hash still matches. Changed managed files stop the operation and
@@ -37,9 +44,10 @@ remain available for Repair.
 ## Import and migration
 
 The importer accepts community zip layouts with packed or loose `.SC2Map` and
-`.SC2Mod` containers. It shows detected metadata and faction before ingestion,
-enforces archive size and entry limits, and supports cancellation during large
-files.
+`.SC2Mod` containers. It recursively discovers containers, strips wrapper and
+mirrored game-layout prefixes, and preserves meaningful map subdirectories. It
+shows detected metadata and faction before ingestion, enforces archive size
+and entry limits, and supports cancellation during large files.
 
 Old SC2CCM campaigns can be imported through the same checked pipeline. The
 desktop backend issues opaque migration candidate IDs. The frontend never

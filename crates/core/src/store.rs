@@ -7,7 +7,7 @@
 //!   ledger.db
 //! ```
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::contracts::ActiveCampaign;
+use crate::contracts::{ActiveCampaign, Health};
 use crate::error::{internal_err, package_err, pkg_err, user_err, user_path_err, Result};
 use crate::identity::PackageId;
 use crate::layout::SlotId;
@@ -132,7 +132,17 @@ pub struct Store {
     root: PathBuf,
     conn: Mutex<rusqlite::Connection>,
     manifests: Mutex<HashMap<PackageId, PackageManifest>>,
+    workflow_health: Mutex<Option<CachedWorkflowHealth>>,
+    verified_deployments: Mutex<HashSet<PathBuf>>,
     import_reserve_bytes: u64,
+}
+
+#[derive(Clone)]
+struct CachedWorkflowHealth {
+    layout_root: PathBuf,
+    save_isolation_expected: bool,
+    save_isolation_available: bool,
+    health: Health,
 }
 
 impl Store {
@@ -195,12 +205,57 @@ impl Store {
             root,
             conn: Mutex::new(conn),
             manifests: Mutex::new(HashMap::new()),
+            workflow_health: Mutex::new(None),
+            verified_deployments: Mutex::new(HashSet::new()),
             import_reserve_bytes,
         })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub(crate) fn cached_workflow_health(
+        &self,
+        layout_root: &Path,
+        save_isolation_expected: bool,
+        save_isolation_available: bool,
+    ) -> Option<Health> {
+        self.workflow_health
+            .lock()
+            .expect("workflow health cache poisoned")
+            .as_ref()
+            .filter(|cached| {
+                cached.layout_root == layout_root
+                    && cached.save_isolation_expected == save_isolation_expected
+                    && cached.save_isolation_available == save_isolation_available
+            })
+            .map(|cached| cached.health.clone())
+    }
+
+    pub(crate) fn cache_workflow_health(
+        &self,
+        layout_root: &Path,
+        save_isolation_expected: bool,
+        save_isolation_available: bool,
+        health: Health,
+    ) {
+        *self
+            .workflow_health
+            .lock()
+            .expect("workflow health cache poisoned") = Some(CachedWorkflowHealth {
+            layout_root: layout_root.to_path_buf(),
+            save_isolation_expected,
+            save_isolation_available,
+            health,
+        });
+    }
+
+    pub(crate) fn invalidate_workflow_health(&self) {
+        self.workflow_health
+            .lock()
+            .expect("workflow health cache poisoned")
+            .take();
     }
 
     pub fn deploy_dir(&self, faction: SlotId, revision: &str) -> Result<PathBuf> {
@@ -211,6 +266,27 @@ impl Store {
         let target = deploy.join(format!("{}-{revision}", faction.as_str()));
         ensure_optional_real_directory(&target, "deployment tree")?;
         Ok(target)
+    }
+
+    pub(crate) fn deployment_was_verified(&self, path: &Path) -> bool {
+        self.verified_deployments
+            .lock()
+            .expect("deployment verification cache poisoned")
+            .contains(path)
+    }
+
+    pub(crate) fn mark_deployment_verified(&self, path: &Path) {
+        self.verified_deployments
+            .lock()
+            .expect("deployment verification cache poisoned")
+            .insert(path.to_path_buf());
+    }
+
+    pub(crate) fn forget_deployment(&self, path: &Path) {
+        self.verified_deployments
+            .lock()
+            .expect("deployment verification cache poisoned")
+            .remove(path);
     }
 
     pub fn ingest(&self, id: &PackageId, faction: SlotId, plan: &PackagePlan) -> Result<String> {
@@ -685,6 +761,32 @@ impl Store {
         self.materialize_tree(manifest, "slot/", dest)
     }
 
+    /// Materialize the complete loose override view rooted at
+    /// `Maps/Campaign`. Only the selected faction contains package files; the
+    /// other faction directories remain empty while the campaign is active.
+    pub fn materialize_campaign(&self, manifest: &PackageManifest, dest: &Path) -> Result<()> {
+        match std::fs::symlink_metadata(dest) {
+            Ok(metadata) => {
+                ensure_real_directory_metadata(dest, &metadata, "campaign deployment root")?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(dest)?;
+                ensure_real_directory(dest, "campaign deployment root")?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        for directory in ["swarm", "void", "voidprologue", "nova"] {
+            ensure_or_create_real_directory(&dest.join(directory), "campaign faction directory")?;
+        }
+        let slot = match manifest.faction {
+            SlotId::Wol => dest.to_path_buf(),
+            SlotId::HotS => dest.join("swarm"),
+            SlotId::LotV => dest.join("void"),
+            SlotId::Nco => dest.join("nova"),
+        };
+        self.materialize_slot(manifest, &slot)
+    }
+
     pub fn materialize_mods(&self, manifest: &PackageManifest, dest: &Path) -> Result<()> {
         self.materialize_tree(manifest, "mods/", dest)
     }
@@ -938,7 +1040,8 @@ impl Store {
         let active = self.active_campaign()?;
         // Deployment trees are content caches, not package-owned directories.
         // Equal package content intentionally shares one `{faction}-{revision}`
-        // tree, which may also be the target of the active slot junction.
+        // tree, which may also be the target of the active campaign-root
+        // junction.
         let deploy_is_referenced = survivors.iter().any(|manifest| {
             manifest.faction == removed.faction && manifest.revision == removed.revision
         }) || active.as_ref().is_some_and(|campaign| {
@@ -961,6 +1064,7 @@ impl Store {
         // without its manifest.
         for deploy in &deploys {
             remove_real_tree_for_removal(deploy, "deployment tree")?;
+            self.forget_deployment(deploy);
         }
         remove_real_tree_for_removal(&package_dir, "package directory")?;
         self.manifests

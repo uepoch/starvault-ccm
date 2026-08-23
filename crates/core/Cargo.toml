@@ -23,6 +23,7 @@ tempfile = "3"
 
 [target."cfg(windows)".dependencies]
 junction = "2.0.0"
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }
 winreg = "0.56.0"
 
 [target."cfg(unix)".dependencies]

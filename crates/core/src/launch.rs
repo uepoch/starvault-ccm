@@ -28,17 +28,9 @@ pub fn sc2_running() -> bool {
     }
     #[cfg(windows)]
     {
-        match Command::new("tasklist")
-            .args(["/FI", "IMAGENAME eq SC2_x64.exe", "/NH"])
-            .output()
-        {
-            Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
-                .to_ascii_lowercase()
-                .contains("sc2_x64"),
-            // Process inspection is a safety gate. If Windows cannot answer,
-            // mutations and launch fail closed as though the game were open.
-            _ => true,
-        }
+        // Process inspection is a safety gate. If Windows cannot answer,
+        // mutations and launch fail closed as though the game were open.
+        process_running("SC2_x64.exe").unwrap_or(true)
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
@@ -87,11 +79,58 @@ fn find_battlenet_exe() -> Option<&'static std::path::Path> {
 /// True when the Battle.net client (not the agent) is running.
 #[cfg(windows)]
 fn battlenet_running() -> bool {
-    Command::new("tasklist")
-        .args(["/FI", "IMAGENAME eq Battle.net.exe", "/NH"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Battle.net.exe"))
-        .unwrap_or(false)
+    process_running("Battle.net.exe").unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn process_running(expected_name: &str) -> Option<bool> {
+    use std::mem::size_of;
+
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    struct Snapshot(windows_sys::Win32::Foundation::HANDLE);
+
+    impl Drop for Snapshot {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    unsafe {
+        let handle = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if handle == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let snapshot = Snapshot(handle);
+        let mut entry = PROCESSENTRY32W {
+            dwSize: size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snapshot.0, &mut entry) == 0 {
+            return None;
+        }
+        loop {
+            let end = entry
+                .szExeFile
+                .iter()
+                .position(|character| *character == 0)
+                .unwrap_or(entry.szExeFile.len());
+            if String::from_utf16_lossy(&entry.szExeFile[..end]).eq_ignore_ascii_case(expected_name)
+            {
+                return Some(true);
+            }
+            if Process32NextW(snapshot.0, &mut entry) == 0 {
+                return (windows_sys::Win32::Foundation::GetLastError() == ERROR_NO_MORE_FILES)
+                    .then_some(false);
+            }
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -181,4 +220,21 @@ pub fn launch(layout: &WindowsLayout) -> Result<()> {
             .map_err(|e| pkg_err(exe.display().to_string(), e.to_string()))?;
     }
     Ok(())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::process_running;
+
+    #[test]
+    fn native_process_snapshot_finds_the_current_test_process() {
+        let executable = std::env::current_exe().unwrap();
+        let name = executable.file_name().unwrap().to_string_lossy();
+
+        assert_eq!(process_running(&name), Some(true));
+        assert_eq!(
+            process_running("svccm-process-that-does-not-exist.exe"),
+            Some(false)
+        );
+    }
 }

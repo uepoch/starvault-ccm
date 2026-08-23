@@ -59,9 +59,9 @@ it names `target_campaign`, the target is verified and cleanup is finalized,
 even when the last journal checkpoint predates the SQLite commit. If neither
 state can be proven, startup reports `recovery_required` and preserves every
 remaining backup and staging path. Journal-bound proofs cover the exact save
-transition, archived save sets, and previous and target campaign-slot objects;
-recovery rejects unknown edits or substituted files instead of inferring
-ownership from path names.
+transition, archived save sets, and previous and target `Maps\Campaign` root
+objects; recovery rejects unknown edits or substituted files instead of
+inferring ownership from path names.
 
 ## State and responses
 

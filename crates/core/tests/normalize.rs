@@ -5,8 +5,11 @@
 
 use std::path::Path;
 
+use svccm_core::identity::PackageId;
+use svccm_core::layout::SlotId;
 use svccm_core::package::metadata::SlotGuessKind;
 use svccm_core::package::normalize::plan_from_extracted;
+use svccm_core::store::Store;
 
 fn fixture(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -222,6 +225,112 @@ fn packed_mod_in_flat_layout_ships_to_mods_root() {
 }
 
 #[test]
+fn packed_maps_strip_game_layout_but_keep_logical_subfolders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("Release/Maps/Campaign/swarm/evolution")).unwrap();
+    std::fs::write(
+        root.join("Release/Maps/Campaign/swarm/evolution/zchar01.SC2Map"),
+        b"packed map",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("Release/Maps/Campaign/swarm/zlab01.SC2Map"),
+        b"packed map",
+    )
+    .unwrap();
+
+    let plan = plan_from_extracted(root).unwrap();
+    let targets = plan
+        .files
+        .iter()
+        .map(|file| file.target.as_str())
+        .collect::<Vec<_>>();
+    assert!(targets.contains(&"slot/evolution/zchar01.SC2Map"));
+    assert!(targets.contains(&"slot/zlab01.SC2Map"));
+}
+
+#[test]
+fn void_prologue_is_treated_as_a_game_layout_prefix() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::create_dir_all(root.join("Maps/Campaign/voidprologue/chapter")).unwrap();
+    std::fs::write(
+        root.join("Maps/Campaign/voidprologue/chapter/prologue.SC2Map"),
+        b"packed map",
+    )
+    .unwrap();
+
+    let plan = plan_from_extracted(root).unwrap();
+    assert_eq!(plan.files[0].target, "slot/chapter/prologue.SC2Map");
+}
+
+#[test]
+fn directory_and_packed_maps_share_the_same_logical_path_rule() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_tarcade_container(&root.join("Maps/Campaign/void/chapter/tarcade.SC2Map"));
+    std::fs::create_dir_all(root.join("Maps/Campaign/void/chapter")).unwrap();
+    std::fs::write(
+        root.join("Maps/Campaign/void/chapter/packed.SC2Map"),
+        b"packed map",
+    )
+    .unwrap();
+
+    let plan = plan_from_extracted(root).unwrap();
+    let targets = plan
+        .files
+        .iter()
+        .map(|file| file.target.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        targets.contains(&"slot/chapter/tarcade.SC2Map/map-payload.txt"),
+        "{targets:?}"
+    );
+    assert!(
+        targets.contains(&"slot/chapter/packed.SC2Map"),
+        "{targets:?}"
+    );
+}
+
+#[test]
+fn nested_mods_component_preserves_its_relative_namespace() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    make_tarcade_container(&root.join("Wrapper/tarcade.SC2Map"));
+    make_raynorrogue_container(&root.join("Wrapper/Dependencies/Mods/SCORE/Shared.SC2Mod"));
+
+    let plan = plan_from_extracted(root).unwrap();
+    assert!(plan
+        .files
+        .iter()
+        .any(|file| file.target == "mods/SCORE/Shared.SC2Mod/payload.txt"));
+}
+
+#[test]
+fn nested_directory_mod_members_use_canonical_separators() {
+    let source = tempfile::tempdir().unwrap();
+    let container = source.path().join("crys_the_swarm_reborn.SC2Mod");
+    let member = container
+        .join("Base.SC2Data")
+        .join("GameData")
+        .join("AbilData.xml");
+    std::fs::create_dir_all(member.parent().unwrap()).unwrap();
+    std::fs::write(&member, b"<Catalog/>").unwrap();
+
+    let plan = plan_from_extracted(source.path()).unwrap();
+    assert_eq!(
+        plan.files[0].target,
+        "mods/crys_the_swarm_reborn.SC2Mod/Base.SC2Data/GameData/AbilData.xml"
+    );
+
+    let store_root = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(store_root.path()).unwrap();
+    let id = PackageId::parse("the-swarm-reborn").unwrap();
+    store.ingest(&id, SlotId::HotS, &plan).unwrap();
+}
+
+#[test]
 fn differing_collision_is_a_hard_error() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
@@ -238,7 +347,15 @@ fn differing_collision_is_a_hard_error() {
     std::fs::copy(fixture("tarcade.DocumentInfo"), other.join("DocumentInfo")).unwrap();
     std::fs::write(other.join("map-payload.txt"), b"different bytes").unwrap();
 
-    assert!(plan_from_extracted(root).is_err());
+    let plan = plan_from_extracted(root).unwrap();
+    assert!(plan
+        .files
+        .iter()
+        .any(|file| file.target == "slot/a/tarcade.SC2Map/map-payload.txt"));
+    assert!(plan
+        .files
+        .iter()
+        .any(|file| file.target == "slot/b/tarcade.SC2Map/map-payload.txt"));
 }
 
 #[test]
@@ -250,12 +367,14 @@ fn identical_collision_deduplicates() {
     make_tarcade_container(&root.join("b/tarcade.SC2Map"));
 
     let plan = plan_from_extracted(root).unwrap();
-    let count = plan
+    assert!(plan
         .files
         .iter()
-        .filter(|f| f.target == "slot/tarcade.SC2Map/map-payload.txt")
-        .count();
-    assert_eq!(count, 1);
+        .any(|file| file.target == "slot/a/tarcade.SC2Map/map-payload.txt"));
+    assert!(plan
+        .files
+        .iter()
+        .any(|file| file.target == "slot/b/tarcade.SC2Map/map-payload.txt"));
 }
 
 #[test]

@@ -136,7 +136,29 @@ fn activate_switch_across_factions_and_restore_are_singleton_transitions() {
 }
 
 #[test]
-fn active_health_marks_rogue_inactive_faction_as_nonrepairable() {
+fn session_health_reuses_startup_and_committed_verification() {
+    let fixture = Fixture::new();
+    let verifications = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&verifications);
+    let workflow = fixture.workflow().with_verification_probe(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+    });
+
+    workflow.library_snapshot().unwrap();
+    workflow.library_snapshot().unwrap();
+    assert_eq!(verifications.load(Ordering::SeqCst), 1);
+
+    workflow.activate(&fixture.first).unwrap();
+    workflow.library_snapshot().unwrap();
+    assert_eq!(verifications.load(Ordering::SeqCst), 3);
+
+    workflow.restore_vanilla().unwrap();
+    workflow.library_snapshot().unwrap();
+    assert_eq!(verifications.load(Ordering::SeqCst), 5);
+}
+
+#[test]
+fn active_health_marks_an_unexpected_campaign_file_as_repairable_drift() {
     let fixture = Fixture::new();
     fixture.workflow().activate(&fixture.first).unwrap();
     let rogue = fixture
@@ -149,13 +171,13 @@ fn active_health_marks_rogue_inactive_faction_as_nonrepairable() {
     let health = fixture.workflow().health();
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues.len(), 1);
-    assert_eq!(health.issues[0].code, "unowned_campaign_files");
-    assert!(!health.issues[0].repairable);
+    assert_eq!(health.issues[0].code, "slot_drift");
+    assert!(health.issues[0].repairable);
     assert_eq!(std::fs::read(rogue).unwrap(), b"rogue");
 }
 
 #[test]
-fn vanilla_health_does_not_hide_an_operation_substring() {
+fn vanilla_health_accepts_preexisting_loose_campaign_overrides() {
     let fixture = Fixture::new();
     let rogue = fixture
         .layout
@@ -165,10 +187,8 @@ fn vanilla_health_does_not_hide_an_operation_substring() {
     std::fs::write(&rogue, b"rogue").unwrap();
 
     let health = fixture.workflow().health();
-    assert_eq!(health.state, HealthState::Drifted);
-    assert_eq!(health.issues.len(), 1);
-    assert_eq!(health.issues[0].code, "unowned_campaign_files");
-    assert!(!health.issues[0].repairable);
+    assert_eq!(health.state, HealthState::Ready);
+    assert!(health.issues.is_empty());
     assert_eq!(std::fs::read(rogue).unwrap(), b"rogue");
 }
 
@@ -280,7 +300,7 @@ fn active_play_and_restore_do_not_depend_on_retained_package_blobs() {
     fixture.workflow().restore_vanilla().unwrap();
 
     assert!(fixture.store.active_campaign().unwrap().is_none());
-    let vanilla_slot = fixture.layout.slot_dir(SlotId::LotV);
+    let vanilla_slot = fixture.layout.campaign_dir();
     let metadata = std::fs::symlink_metadata(&vanilla_slot).unwrap();
     assert!(metadata.is_dir());
     assert!(!metadata.file_type().is_symlink());
@@ -981,7 +1001,7 @@ fn active_external_slot_link_is_nonrepairable_and_never_followed() {
 
     let fixture = Fixture::new();
     fixture.workflow().activate(&fixture.first).unwrap();
-    let live = fixture.layout.slot_dir(SlotId::LotV);
+    let live = fixture.layout.campaign_dir();
     let external = fixture._temp.path().join("external-active-slot");
     std::fs::rename(&live, &external).unwrap();
     symlink(&external, &live).unwrap();
@@ -993,7 +1013,7 @@ fn active_external_slot_link_is_nonrepairable_and_never_followed() {
     let error = fixture.workflow().restore_vanilla().unwrap_err();
     assert_eq!(error.code(), "unowned_campaign_slot_link");
     assert_eq!(
-        std::fs::read(external.join("first.SC2Map/payload")).unwrap(),
+        std::fs::read(external.join("void/first.SC2Map/payload")).unwrap(),
         b"first"
     );
     assert!(std::fs::symlink_metadata(&live)
@@ -1019,9 +1039,9 @@ fn dangling_owned_slot_link_is_repaired_to_a_verified_copy_before_restore() {
         .unwrap();
     fixture
         .store
-        .materialize_slot(&manifest, &deployed)
+        .materialize_campaign(&manifest, &deployed)
         .unwrap();
-    let live = fixture.layout.slot_dir(SlotId::LotV);
+    let live = fixture.layout.campaign_dir();
     std::fs::remove_dir_all(&live).unwrap();
     symlink(&deployed, &live).unwrap();
     std::fs::remove_dir_all(&deployed).unwrap();
@@ -1040,7 +1060,7 @@ fn dangling_owned_slot_link_is_repaired_to_a_verified_copy_before_restore() {
     fixture.workflow().repair_active().unwrap();
     assert!(!live.symlink_metadata().unwrap().file_type().is_symlink());
     assert_eq!(
-        std::fs::read(live.join("first.SC2Map/payload")).unwrap(),
+        std::fs::read(live.join("void/first.SC2Map/payload")).unwrap(),
         b"first"
     );
     assert_eq!(fixture.workflow().health().state, HealthState::Ready);
@@ -1096,20 +1116,15 @@ fn recovery_rejects_a_copy_to_link_backup_substitution_before_mods_rollback() {
     let journal = PendingOperation::load(fixture.store.root())
         .unwrap()
         .unwrap();
-    let previous_slot = journal
-        .paths
-        .slots
-        .iter()
-        .find(|slot| slot.faction == SlotId::LotV)
-        .unwrap();
+    let previous_slot = &journal.paths.slots[0];
     let external = fixture._temp.path().join("substituted-previous-slot");
     std::fs::rename(&previous_slot.backup, &external).unwrap();
     symlink(&external, &previous_slot.backup).unwrap();
 
     let error = fixture.workflow().recover_pending().unwrap_err();
-    assert_eq!(error.code(), "unsafe_slot_artifact");
+    assert_eq!(error.code(), "slot_drift");
     assert_eq!(
-        std::fs::read(external.join("first.SC2Map/payload")).unwrap(),
+        std::fs::read(external.join("void/first.SC2Map/payload")).unwrap(),
         b"first"
     );
     assert_eq!(
@@ -1126,7 +1141,7 @@ fn recovery_rejects_a_copy_to_link_backup_substitution_before_mods_rollback() {
 }
 
 #[test]
-fn committed_recovery_tolerates_a_crash_partway_through_artifact_cleanup() {
+fn committed_recovery_rejects_loss_of_the_preserved_plain_tree() {
     let fixture = Fixture::new();
     fixture
         .workflow()
@@ -1141,12 +1156,9 @@ fn committed_recovery_tolerates_a_crash_partway_through_artifact_cleanup() {
             std::fs::remove_dir_all(&slot.backup).unwrap();
         }
     }
-    let mods_staging = journal.paths.mods_staging.unwrap();
-    std::fs::remove_dir_all(&mods_staging).unwrap();
+    let error = fixture.workflow().recover_pending().unwrap_err();
 
-    fixture.workflow().recover_pending().unwrap();
-
-    assert_eq!(fixture.workflow().health().state, HealthState::Ready);
+    assert_eq!(error.code(), "slot_drift");
     assert!(fixture.store.active_campaign().unwrap().is_some());
     assert_eq!(
         std::fs::read(fixture.layout.mods_dir().join("first.SC2Mod")).unwrap(),
@@ -1154,7 +1166,7 @@ fn committed_recovery_tolerates_a_crash_partway_through_artifact_cleanup() {
     );
     assert!(PendingOperation::load(fixture.store.root())
         .unwrap()
-        .is_none());
+        .is_some());
 }
 
 #[test]
@@ -1176,7 +1188,7 @@ fn committed_cleanup_rejects_a_same_path_slot_backup_substitution_before_any_del
     std::fs::write(slot_backup.join("unrelated"), b"preserve me").unwrap();
 
     let error = fixture.workflow().recover_pending().unwrap_err();
-    assert_eq!(error.code(), "unsafe_slot_artifact");
+    assert_eq!(error.code(), "slot_drift");
     assert_eq!(
         std::fs::read(slot_backup.join("unrelated")).unwrap(),
         b"preserve me"
@@ -1239,11 +1251,8 @@ fn direct_committed_cleanup_globally_preflights_before_deleting_slot_artifacts()
         b"preserve me"
     );
     assert!(backup.is_dir());
-    assert!(journal
-        .paths
-        .slots
-        .iter()
-        .any(|slot| slot.backup.symlink_metadata().is_ok()));
+    assert!(journal.paths.slots[0].backup.symlink_metadata().is_ok());
+    assert!(!fixture.layout.plain_campaign_dir().exists());
     assert_eq!(
         fixture.store.active_campaign().unwrap().unwrap().id,
         fixture.first

@@ -37,12 +37,13 @@ the journal to `prepared`, including the save recovery proof, exact previous
 and target slot identities, the Mods rollback-plan digest, and any repair
 backup identity. The save proof binds the operation, ownership transition,
 previous and target Saves and Banks trees, and every archived save-set update.
-The slot identities bind each faction path to its exact object kind and content
-or junction target. Recovery therefore accepts only the prepared previous or
-target state, rather than trusting a replacement that happens to occupy an
-expected path. This makes a process exit during staging recoverable without
-scanning for filename patterns. The journal is flushed before each destructive
-phase, and backups remain until the ledger commits and the final tree verifies.
+The campaign identity binds the single `Maps\Campaign` object to its exact kind
+and content or junction target. Recovery therefore accepts only the prepared
+previous or target state, rather than trusting a replacement that happens to
+occupy an expected path. This makes a process exit during staging recoverable
+without scanning for filename patterns. The journal is flushed before each
+destructive phase, and backups remain until the ledger commits and the final
+tree verifies.
 
 ## Activation
 
@@ -53,12 +54,12 @@ Activation runs in this order:
 3. load and hash-verify the target manifest;
 4. verify the current owned campaign files and managed Mods;
 5. write the `preparing` journal with every owned artifact path;
-6. stage the complete target campaign and Mods trees;
+6. stage the complete synthetic `Maps\Campaign` view and Mods trees;
 7. reject a different unowned file already present at a target Mods path;
 8. classify an identical unowned file as borrowed and advance the journal to
    `prepared`;
 9. transition saves when isolation is enabled;
-10. restore the previous campaign files and deploy the target;
+10. swap the previous campaign-root object for the target;
 11. replace the managed Mods set;
 12. commit the active campaign and managed Mods rows;
 13. verify the result, delete backups, and clear the journal.
@@ -84,8 +85,9 @@ Windows directory junctions according to their actual type.
 ## Restore and repair
 
 `restore_vanilla()` transitions isolated saves to the plain owner, restores
-the active campaign files, removes unchanged created Mods, preserves borrowed
-Mods, commits an empty `active_campaign`, then verifies vanilla.
+the exact loose `Maps\Campaign` tree preserved at activation, removes unchanged
+created Mods, preserves borrowed Mods, commits an empty `active_campaign`, then
+verifies vanilla.
 
 `repair_active()` uses the same journal and target manifest. The explicit
 Repair action backs up and replaces drifted StarVault-created files. It never
@@ -107,9 +109,28 @@ a link or file substitution cannot redirect recovery or cleanup.
 Recovery-required state preserves the journal, staging trees, and backups. All
 mutations remain blocked until a repair or operator action can prove one state.
 
-## Junction and copy behavior
+## Campaign-root junction and copy behavior
 
-The game layout may use directory junctions or copies behind the same staged
-workflow. Save moves across volumes detect `ErrorKind::CrossesDevices` and use
+Official campaign maps live in the game archives; `Maps\Campaign` is only the
+loose override tree. StarVault therefore builds one complete synthetic view and
+normally exposes it through one junction at `Maps\Campaign` for every faction:
+
+- Wings of Liberty package maps are placed at the synthetic root;
+- Heart of the Swarm maps are placed below `swarm\`;
+- Legacy of the Void maps are placed below `void\`;
+- Nova Covert Ops maps are placed below `nova\`;
+- the other faction directories, including `voidprologue\`, remain empty.
+
+The pre-activation loose tree is renamed intact to
+`Campaign.starvault-plain`; return to vanilla puts that exact object back.
+StarVault never copies official maps out of the game archives. If junction
+creation is unavailable, the same synthetic view can be copied as a fallback.
+
+Archive normalization recursively discovers map containers, removes wrapper
+and mirrored `Maps\Campaign\<faction>` prefixes, and preserves meaningful
+logical subdirectories beneath that point. Mods use their separate managed-file
+transaction and are not placed in the campaign-root junction.
+
+Save moves across volumes detect `ErrorKind::CrossesDevices` and use
 copy-then-remove. Sharing violations from antivirus or OneDrive receive a
 bounded retry. Exhausted retries roll back.

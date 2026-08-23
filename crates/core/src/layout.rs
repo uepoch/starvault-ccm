@@ -88,9 +88,22 @@ impl WindowsLayout {
         self.root.join("StarCraft II.exe")
     }
 
+    /// Shared loose-campaign override root. StarVault swaps this one object for
+    /// every faction while a custom campaign is active.
+    pub fn campaign_dir(&self) -> PathBuf {
+        self.root.join("Maps").join("Campaign")
+    }
+
+    /// Preserved external campaign overrides while StarVault owns
+    /// [`Self::campaign_dir`]. Keeping it beside the live directory makes the
+    /// transition an atomic same-volume rename.
+    pub fn plain_campaign_dir(&self) -> PathBuf {
+        self.root.join("Maps").join("Campaign.starvault-plain")
+    }
+
     /// Directory holding a slot's active content.
     pub fn slot_dir(&self, slot: SlotId) -> PathBuf {
-        let base = self.root.join("Maps").join("Campaign");
+        let base = self.campaign_dir();
         match slot {
             SlotId::Wol => base,
             SlotId::HotS => base.join("swarm"),
@@ -115,20 +128,18 @@ impl WindowsLayout {
         }
     }
 
-    /// Reject filesystem indirection on every shared path that a campaign
+    /// Reject filesystem indirection on every shared parent that a campaign
     /// mutation can write through.
     ///
     /// Call this immediately before each destructive workflow phase. Missing
     /// game-owned child directories are allowed because activation can create
-    /// them. Existing components must be real directories, not symlinks,
-    /// junctions, or other reparse points. Dedicated slot paths are
-    /// intentionally not inspected here because StarVault may deploy those as
-    /// junctions; their real parent, `Maps/Campaign`, is still checked.
+    /// them. `Maps/Campaign` is intentionally not checked here because the
+    /// active campaign is represented by a StarVault-owned junction at that
+    /// exact path. The slot manager verifies its target before any mutation.
     pub fn validate_mutation_roots(&self) -> Result<(), crate::error::Error> {
         require_real_directory(&self.root, "configured game root")?;
         let maps = self.root.join("Maps");
         optional_real_directory(&maps, "game Maps directory")?;
-        optional_real_directory(&maps.join("Campaign"), "shared campaign directory")?;
         optional_real_directory(&self.mods_dir(), "game Mods directory")?;
         Ok(())
     }
@@ -265,7 +276,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn mutation_roots_reject_linked_root_and_shared_children() {
+    fn mutation_roots_reject_linked_parents_but_allow_the_owned_campaign_link() {
         use std::os::unix::fs::symlink;
 
         fn assert_rejected(layout: &WindowsLayout, expected_path: &Path) {
@@ -281,23 +292,26 @@ mod tests {
         symlink(&external_root, &linked_root).unwrap();
         assert_rejected(&WindowsLayout::new(&linked_root), &linked_root);
 
-        for component in ["Maps", "Campaign", "Mods"] {
+        for component in ["Maps", "Mods"] {
             let root = temporary.path().join(format!("sc2-{component}"));
             std::fs::create_dir_all(&root).unwrap();
             let external = temporary.path().join(format!("external-{component}"));
             std::fs::create_dir_all(&external).unwrap();
             let linked = match component {
                 "Maps" => root.join("Maps"),
-                "Campaign" => {
-                    std::fs::create_dir(root.join("Maps")).unwrap();
-                    root.join("Maps/Campaign")
-                }
                 "Mods" => root.join("Mods"),
                 _ => unreachable!(),
             };
             symlink(&external, &linked).unwrap();
             assert_rejected(&WindowsLayout::new(&root), &linked);
         }
+
+        let root = temporary.path().join("sc2-Campaign");
+        std::fs::create_dir_all(root.join("Maps")).unwrap();
+        let external = temporary.path().join("external-Campaign");
+        std::fs::create_dir_all(&external).unwrap();
+        symlink(&external, root.join("Maps/Campaign")).unwrap();
+        WindowsLayout::new(root).validate_mutation_roots().unwrap();
     }
 
     #[cfg(unix)]

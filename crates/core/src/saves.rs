@@ -1072,6 +1072,37 @@ impl PreparedSaveTransition {
         self.finalize_with(&SystemSaveIo)
     }
 
+    /// Read-only committed-cleanup preflight. The application workflow calls
+    /// this before finalizing any other resource, so corrupt save evidence
+    /// cannot cause partial cross-resource cleanup.
+    pub(crate) fn verify_finalize_ready(&self) -> Result<()> {
+        self.verify_finalize_ready_with(&SystemSaveIo)
+    }
+
+    fn verify_finalize_ready_with<I: SaveIo>(&self, io: &I) -> Result<()> {
+        if self.receipt_exists()? {
+            return self.verify_committed_with(io);
+        }
+        self.verify_static_artifacts(io)?;
+        if !self.marker_exists(io, APPLY_COMPLETE)? {
+            return Err(user_err(
+                "save_transition_not_applied",
+                "save transition cannot be finalized before it is applied",
+            ));
+        }
+        if !self.marker_exists(io, APPLY_STARTED)? {
+            return Err(user_err(
+                "invalid_save_operation_markers",
+                "save operation completion marker exists without a start marker",
+            ));
+        }
+        self.verify_target_live(io)?;
+        if !self.transition.is_noop() {
+            self.verify_desired_live(io)?;
+        }
+        Ok(())
+    }
+
     #[doc(hidden)]
     pub fn finalize_with<I: SaveIo>(&self, io: &I) -> Result<()> {
         if self.receipt_exists()? {

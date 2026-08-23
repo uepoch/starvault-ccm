@@ -884,21 +884,19 @@ pub fn finalize_paths(backup: &Path, staging: &Path) -> Result<()> {
     }
 }
 
-/// Remove committed or rollback-verified Mods artifacts only while the plan,
-/// backup tree, and staged target still match journal-bound evidence. Missing
-/// artifacts are accepted only in the cleanup order this function produces.
-pub(crate) fn finalize_paths_bound(
-    backup: &Path,
-    staging: &Path,
-    expected_plan_sha256: &str,
-) -> Result<()> {
+fn finalize_paths_bound(backup: &Path, staging: &Path, expected_plan_sha256: &str) -> Result<()> {
     verify_finalize_paths_bound(backup, staging, expected_plan_sha256)?;
+    finalize_preverified_paths(backup, staging)
+}
+
+/// Remove artifacts after the workflow globally verified every cleanup tree.
+/// The caller must hold the mutation lock and call `verify_finalize_paths_bound`
+/// immediately before this function.
+pub(crate) fn finalize_preverified_paths(backup: &Path, staging: &Path) -> Result<()> {
     if operation_artifact_exists(staging)? {
-        verify_finalize_paths_bound(backup, staging, expected_plan_sha256)?;
         remove_entry(staging)?;
     }
     if operation_artifact_exists(backup)? {
-        verify_bound_backup(backup, expected_plan_sha256)?;
         remove_entry(backup)?;
     }
     Ok(())
