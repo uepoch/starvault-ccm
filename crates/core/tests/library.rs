@@ -87,3 +87,86 @@ fn legacy_detection_reads_exe_hint() {
         Some(LegacyCcmInstall { exe_hint: None })
     );
 }
+
+#[test]
+fn set_metadata_rewrites_fields_without_new_revision() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = Store::open(tmp.path().join("store")).unwrap();
+    make_map_container(&tmp.path().join("src/a.SC2Map"));
+    let rev = ingest(
+        &store,
+        &tmp.path().join("src/a.SC2Map"),
+        "alpha",
+        SlotId::LotV,
+    );
+
+    store
+        .set_metadata("alpha", "New Title", " Auth ", " 1.2 ", "Desc")
+        .unwrap();
+    let e = &library::scan(&store).unwrap()[0];
+    assert_eq!(e.title.as_deref(), Some("New Title"));
+    assert_eq!(e.author.as_deref(), Some("Auth")); // trimmed
+    assert_eq!(e.version.as_deref(), Some("1.2"));
+    assert_eq!(e.desc.as_deref(), Some("Desc"));
+    assert_eq!(e.rev, rev, "metadata is excluded from the revision hash");
+
+    // Blank fields clear back to None.
+    store.set_metadata("alpha", "  ", "", "", "").unwrap();
+    let e = &library::scan(&store).unwrap()[0];
+    assert!(e.title.is_none() && e.author.is_none() && e.version.is_none() && e.desc.is_none());
+
+    assert!(store.set_metadata("ghost", "t", "a", "v", "d").is_err());
+}
+
+#[test]
+fn remove_package_reclaims_storage_and_refuses_active() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sc2 = tempfile::tempdir().unwrap();
+    let layout = svccm_core::layout::WindowsLayout::new(sc2.path());
+    let store = Store::open(tmp.path().join("store")).unwrap();
+
+    // Distinct payloads so each package owns distinct blobs.
+    let a = tmp.path().join("src/a");
+    std::fs::create_dir_all(a.join("a.SC2Map")).unwrap();
+    std::fs::write(a.join("a.SC2Map/payload.txt"), b"alpha-payload").unwrap();
+    let b = tmp.path().join("src/b");
+    std::fs::create_dir_all(b.join("b.SC2Map")).unwrap();
+    std::fs::write(b.join("b.SC2Map/payload.txt"), b"beta-payload").unwrap();
+
+    let rev_a = ingest(&store, &a, "alpha", SlotId::LotV);
+    let rev_b = ingest(&store, &b, "beta", SlotId::Wol);
+
+    // A deploy tree for alpha's rev (the shape activation leaves behind).
+    let deploy = store.deploy_dir("lotv", &rev_a);
+    std::fs::create_dir_all(&deploy).unwrap();
+    std::fs::write(deploy.join("file.txt"), b"x").unwrap();
+
+    // Active packages refuse removal.
+    let manager = SlotManager::new(&layout, &store);
+    manager.activate(SlotId::Wol, "beta", &rev_b).unwrap();
+    assert!(store.remove_package("beta").is_err());
+
+    // Removing alpha drops its package dir, deploy tree and blobs.
+    let alpha_blob = store.load_manifest("alpha", &rev_a).unwrap().files[0]
+        .sha256
+        .clone();
+    store.remove_package("alpha").unwrap();
+    assert!(!store.root().join("packages/alpha").exists());
+    assert!(!deploy.exists());
+    assert!(!store
+        .root()
+        .join("blobs")
+        .join(&alpha_blob[..2])
+        .join(&alpha_blob)
+        .exists());
+    assert!(
+        store.root().join("packages/beta").exists(),
+        "beta untouched"
+    );
+    let entries = library::scan(&store).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].id, "beta");
+
+    assert!(store.remove_package("alpha").is_err(), "already removed");
+    assert!(store.remove_package("ghost").is_err());
+}

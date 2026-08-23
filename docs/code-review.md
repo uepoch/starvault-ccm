@@ -81,7 +81,7 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 - ☐ B15 LOW — test fixture helpers duplicated across end_to_end/normalize/
   container tests; move to tests/common/mod.rs. (The 4 near-identical dir
   walkers are optional consolidation, skip.)
-- ☐ B16 LOW — test gaps: `remove_package` and `set_metadata` have zero core
+- ☑ B16 LOW (6d0ac8e) — test gaps: `remove_package` and `set_metadata` have zero core
   tests; add the restore/union invariant test (fails until B2 lands);
   empty-slug edge (B12).
 
