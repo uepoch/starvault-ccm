@@ -228,6 +228,14 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
 /// - mod outside Mods    → `mods/<basename>` (legacy CCM contract: maps
 ///   reference these at the Mods root)
 fn canonical_container_target(container: &Path, is_map: bool, wrapper: &Path) -> String {
+    // Accepted asymmetry: directory MAP containers flatten to
+    // `slot/<basename>` (the legacy CCM contract — the game's campaign
+    // launcher addresses dir-form maps at the slot root, proven by the
+    // game-mirror acceptance run), while PACKED map files keep their
+    // wrapper-relative subfolder via the loose-file rule (Swarm Reborn's
+    // `evolution/` subfolder is load-bearing). Same package packed vs
+    // unpacked can therefore normalize differently; both forms work
+    // because each resolves the way its form is referenced.
     let rel = container.strip_prefix(wrapper).unwrap_or(container);
     let starts_with_mods = rel
         .components()
