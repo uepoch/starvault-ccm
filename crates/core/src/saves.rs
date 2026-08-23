@@ -291,8 +291,14 @@ impl SavesManager {
                     set_dir.join("Banks")
                 };
                 let dest = dest_root.join(&name);
-                if dest.symlink_metadata().is_ok() {
-                    std::fs::remove_dir_all(&dest)?;
+                // remove_dir_all on a FILE is os error 267 on Windows; remove
+                // by the destination's own kind.
+                if let Ok(meta) = dest.symlink_metadata() {
+                    if meta.is_dir() {
+                        std::fs::remove_dir_all(&dest)?;
+                    } else {
+                        std::fs::remove_file(&dest)?;
+                    }
                 }
                 std::fs::create_dir_all(&dest_root)?;
                 move_entry(&path, &dest, path.is_dir())?;

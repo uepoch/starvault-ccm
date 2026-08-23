@@ -66,6 +66,13 @@ fn swap_isolates_saves_between_owners_round_trip() {
     // Campaign progress banks live beside Saves (profile dir), not inside.
     let banks = live.parent().unwrap().join("Banks");
     touch(&banks.join("2-S2-1-777/plain-bank.SC2Bank"), b"plain-bank");
+    // A vanilla bank already sitting in the plain set (previous sweep):
+    // the collision removal must handle file-shaped destinations (os error
+    // 267 when remove_dir_all hits a file).
+    touch(
+        &store.join("saves/lotv-plain/Banks/ZCampaignStats.SC2Bank"),
+        b"older",
+    );
 
     // Activate custom campaign: plain saves archived, campaign set fresh.
     mgr.swap(SlotId::LotV, "kerrigan", "plain").unwrap();
