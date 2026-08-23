@@ -272,6 +272,11 @@ pub fn import_analyze(
     op_id: String,
     path: String,
 ) -> Result<svccm_core::package::import::ImportPreview, String> {
+    // op_id is webview-supplied and lands in a filesystem path: only a
+    // plain [A-Za-z0-9-]+ token is accepted (no separators, no traversal).
+    if op_id.is_empty() || !op_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(format!("invalid op id `{op_id}`"));
+    }
     let zip_path = PathBuf::from(&path);
     if !zip_path.is_file() {
         return Err(format!("not a file: {path}"));
