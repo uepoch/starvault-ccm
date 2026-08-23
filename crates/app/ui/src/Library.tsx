@@ -231,11 +231,11 @@ export default function Library({
           const busy = busyId === entry.id;
           return (
             <Group gap="xs" wrap="nowrap" justify="flex-end">
-              <Tooltip label={active ? "Activated" : "Activate"}>
+              <Tooltip label={active ? "Activated" : "Activate"} openDelay={300}>
                 <Button
                   size="compact-sm"
                   variant="subtle"
-                  color="green"
+                  color="gray"
                   disabled={active || busy}
                   px={5}
                   onClick={() => activate(entry)}
@@ -244,7 +244,7 @@ export default function Library({
                   {active ? <IconCircleCheck size={16} /> : <IconToggleRight size={16} />}
                 </Button>
               </Tooltip>
-              <Tooltip label="Edit metadata">
+              <Tooltip label="Edit metadata" openDelay={300}>
                 <Button
                   size="compact-sm"
                   variant="subtle"
@@ -257,7 +257,7 @@ export default function Library({
                   <IconPencil size={16} />
                 </Button>
               </Tooltip>
-              <Tooltip label="Open folder">
+              <Tooltip label="Open folder" openDelay={300}>
                 <Button
                   size="compact-sm"
                   variant="subtle"
@@ -280,7 +280,7 @@ export default function Library({
               >
                 Play
               </Button>
-              <Tooltip label="Remove">
+              <Tooltip label="Remove" openDelay={300}>
                 <Button
                   size="compact-sm"
                   variant="subtle"
