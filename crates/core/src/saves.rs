@@ -198,7 +198,26 @@ impl SavesManager {
     }
 
     /// Move the faction's live saves into `set_dir`. Live wins on collision.
+    /// `rename` falls back to copy+remove across volumes (Documents
+    /// relocated to another drive).
     fn sweep_into(&self, slot: SlotId, set_dir: &Path) -> Result<usize> {
+        fn move_entry(src: &Path, dest: &Path, dir: bool) -> Result<()> {
+            match std::fs::rename(src, dest) {
+                Ok(()) => Ok(()),
+                Err(e) if e.raw_os_error() == Some(18) => {
+                    // EXDEV: cross-volume; copy semantics, then drop source.
+                    if dir {
+                        crate::slots::copy_tree(src, dest)?;
+                        std::fs::remove_dir_all(src)?;
+                    } else {
+                        std::fs::copy(src, dest)?;
+                        std::fs::remove_file(src)?;
+                    }
+                    Ok(())
+                }
+                Err(e) => Err(e.into()),
+            }
+        }
         let mut moved = 0;
         let mut touched = false;
         for file in self.live_files(slot) {
@@ -210,7 +229,7 @@ impl SavesManager {
             if dest.symlink_metadata().is_ok() {
                 std::fs::remove_file(&dest)?;
             }
-            std::fs::rename(&file, &dest)?;
+            move_entry(&file, &dest, false)?;
             moved += 1;
         }
         // Banks ride with the set: campaign progress (the "continue"
@@ -232,7 +251,7 @@ impl SavesManager {
             if dest.symlink_metadata().is_ok() {
                 std::fs::remove_dir_all(&dest)?;
             }
-            std::fs::rename(&dir, &dest)?;
+            move_entry(&dir, &dest, true)?;
             moved += 1;
         }
         Ok(moved)
