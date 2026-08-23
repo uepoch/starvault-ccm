@@ -28,7 +28,9 @@ pub fn init(app: &AppHandle) {
 
 /// Flip telemetry at runtime (Settings toggle); initializes on first enable.
 pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
+    if ENABLED.swap(on, Ordering::Relaxed) == on {
+        return; // already in the requested state: no second client
+    }
     if on {
         let _guard = sentry::init((
             DSN,
