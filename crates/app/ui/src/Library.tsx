@@ -303,6 +303,10 @@ export default function Library({
     columnHelper.accessor("imported_at", {
       header: "Imported",
       cell: (info) => formatDate(info.getValue()),
+      // Fit the rendered text exactly (ISO date) so the header label does
+      // not stretch the column wider than the cell content.
+      size: 0,
+      meta: { fitContent: true },
     }),
     columnHelper.display({
       id: "actions",
@@ -582,7 +586,16 @@ export default function Library({
                     const ariaSort =
                       sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none";
                     return (
-                      <Table.Th key={header.id} aria-sort={canSort ? ariaSort : undefined}>
+                      <Table.Th
+                        key={header.id}
+                        aria-sort={canSort ? ariaSort : undefined}
+                        style={
+                          (header.column.columnDef.meta as { fitContent?: boolean } | undefined)
+                            ?.fitContent
+                            ? { width: "1%", whiteSpace: "nowrap" }
+                            : undefined
+                        }
+                      >
                         {canSort ? (
                           <UnstyledButton
                             onClick={header.column.getToggleSortingHandler()}

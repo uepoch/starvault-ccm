@@ -12,8 +12,8 @@
     "windows": [
       {
         "title": "StarVault CCM",
-        "width": 960,
-        "height": 700,
+        "width": 1024,
+        "height": 720,
         "dragDropEnabled": true
       }
     ],
