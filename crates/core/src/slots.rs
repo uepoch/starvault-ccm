@@ -96,14 +96,18 @@ impl<'a> SlotManager<'a> {
                 self.store
                     .prune_mods_union(&union, &self.layout.mods_dir())?;
                 cleanup_if_exists(&backup);
-                let _ = self.reclaim_leftovers(slot);
+                for note in self.reclaim_leftovers(slot) {
+                    tracing::info!(slot = slot.as_str(), "{note}");
+                }
                 Ok(())
             }
             Err(e) => {
                 if slot_dir.symlink_metadata().is_err() && backup.symlink_metadata().is_ok() {
                     let _ = std::fs::rename(&backup, &slot_dir);
                 }
-                let _ = self.reclaim_leftovers(slot);
+                for note in self.reclaim_leftovers(slot) {
+                    tracing::warn!(slot = slot.as_str(), "{note}");
+                }
                 Err(e)
             }
         }

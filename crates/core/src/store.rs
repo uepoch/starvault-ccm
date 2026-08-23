@@ -511,6 +511,15 @@ fn copy_with_retry(src: &Path, dest: &Path) -> Result<()> {
         match std::fs::copy(src, dest) {
             Ok(_) => return Ok(()),
             Err(e) => {
+                // AV races retry silently in the happy case; a failed
+                // retry must leave a trace for support.
+                tracing::warn!(
+                    attempt = attempt + 1,
+                    src = %src.display(),
+                    dest = %dest.display(),
+                    error = %e,
+                    "copy retry"
+                );
                 last = Some(e);
                 std::thread::sleep(std::time::Duration::from_millis(150 * (attempt + 1)));
             }

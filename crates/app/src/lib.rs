@@ -19,8 +19,15 @@ fn spawn_update_check(app: tauri::AppHandle) {
         let Ok(updater) = app.updater() else {
             return;
         };
-        let Ok(Some(update)) = updater.check().await else {
-            return;
+        let check = match updater.check().await {
+            Ok(v) => v,
+            Err(e) => {
+                commands::log_op(&app, "warn", "update", &format!("check failed: {e}"));
+                return;
+            }
+        };
+        let Some(update) = check else {
+            return; // up to date
         };
         let version = update.version.clone();
         let level = match update
