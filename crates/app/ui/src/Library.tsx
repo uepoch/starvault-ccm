@@ -55,10 +55,6 @@ interface LibraryEntry {
   imported_at: number | null;
 }
 
-interface LegacyCcmInstall {
-  exe_hint: string | null;
-}
-
 const columnHelper = createColumnHelper<LibraryEntry>();
 
 function formatDate(epoch: number | null): string {
@@ -75,7 +71,6 @@ export default function Library({
 }) {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [legacy, setLegacy] = useState<LegacyCcmInstall | null>(null);
   const [removing, setRemoving] = useState<LibraryEntry | null>(null);
   const [editing, setEditing] = useState<LibraryEntry | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -100,11 +95,6 @@ export default function Library({
   };
 
   useEffect(refresh, []);
-  useEffect(() => {
-    invoke<LegacyCcmInstall | null>("detect_legacy_ccm")
-      .then(setLegacy)
-      .catch(() => setLegacy(null));
-  }, []);
 
   const openEdit = (entry: LibraryEntry) => {
     setEditing(entry);
@@ -338,7 +328,7 @@ export default function Library({
         />
       </Group>
 
-      <MigrationBanner onMigrated={refresh} legacy={legacy} />
+      <MigrationBanner onMigrated={refresh} />
 
       {error && (
         <Alert color="red" title="Error">
