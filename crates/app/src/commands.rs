@@ -434,6 +434,9 @@ pub fn clear_all_data(
     *state.store.lock().expect("store poisoned") = None;
     *state.config_cache.lock().expect("config poisoned") = None;
     *state.campaigns_cache.lock().expect("campaigns poisoned") = None;
+    // Import operations point at extracted trees under the cache scratch
+    // dir that we are about to delete; the map would hold dead entries.
+    state.import_ops.lock().expect("import ops poisoned").clear();
     invalidate_library(&cache);
 
     let data_dir = app
@@ -974,8 +977,9 @@ pub async fn reconcile(
         Err(e) => {
             // Surface what failed and where — reconcile errors lose their
             // path context through `to_string` alone.
-            log_op(&app, "error", "reconcile", &format!("{e:#}"));
-            Err(e.to_string())
+            let full = format!("{e:#}");
+            log_op(&app, "error", "reconcile", &full);
+            Err(full)
         }
     }
 }
@@ -1144,10 +1148,7 @@ pub fn reveal_package(
         .load_manifest(&id, &rev)
         .map_err(|e| fail(&app, "launch", e))?;
 
-    let deploy = store
-        .root()
-        .join("deploy")
-        .join(format!("{}-{}", manifest.slot, manifest.rev));
+    let deploy = store.deploy_dir(&manifest.slot, &manifest.rev);
     let target = if deploy.is_dir() {
         deploy
     } else {
