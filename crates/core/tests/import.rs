@@ -171,7 +171,7 @@ fn restore_and_replace_prune_orphaned_mods_files() {
     // The game's Mods\ is a global namespace: restoring (or replacing) a
     // package must remove its union files that no active package owns,
     // keep files still owned by others, and prune emptied container dirs.
-    use svccm_core::layout::{GameLayout, SlotId, WindowsLayout};
+    use svccm_core::layout::{SlotId, WindowsLayout};
     use svccm_core::slots::SlotManager;
     use svccm_core::store::Store;
 

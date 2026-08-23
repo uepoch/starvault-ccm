@@ -1,7 +1,7 @@
 //! Launch pre-flight drift detection and legacy migration candidates.
 
 use svccm_core::launch::preflight;
-use svccm_core::layout::{GameLayout, SlotId, WindowsLayout};
+use svccm_core::layout::{SlotId, WindowsLayout};
 use svccm_core::library::migration_candidates;
 use svccm_core::slots::SlotManager;
 use svccm_core::store::Store;

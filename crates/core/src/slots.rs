@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::StrategyChoice;
 use crate::error::{pkg_err, Result};
-use crate::layout::{GameLayout, SlotId, WindowsLayout};
+use crate::layout::{SlotId, WindowsLayout};
 use crate::store::{PackageManifest, Store};
 
 /// Which package revision a slot points at. `None` = plain campaign.

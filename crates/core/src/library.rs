@@ -98,10 +98,7 @@ pub struct MigrationCandidate {
 /// slots' own locations — i.e. what an old CCM install deployed there.
 pub fn migration_candidates(layout: &WindowsLayout) -> Vec<MigrationCandidate> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(crate::layout::GameLayout::slot_dir(
-        layout,
-        crate::layout::SlotId::Wol,
-    )) else {
+    let Ok(entries) = std::fs::read_dir(layout.slot_dir(crate::layout::SlotId::Wol)) else {
         return out;
     };
     for entry in entries.flatten() {

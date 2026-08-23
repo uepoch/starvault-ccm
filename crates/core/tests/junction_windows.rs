@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use svccm_core::layout::{GameLayout, SlotId, WindowsLayout};
+use svccm_core::layout::{SlotId, WindowsLayout};
 use svccm_core::slots::SlotManager;
 use svccm_core::store::Store;
 

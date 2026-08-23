@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use svccm_core::layout::{GameLayout, SlotId, WindowsLayout};
+use svccm_core::layout::{SlotId, WindowsLayout};
 use svccm_core::package::normalize::plan_from_extracted;
 use svccm_core::slots::SlotManager;
 use svccm_core::store::Store;

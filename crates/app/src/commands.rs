@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use svccm_core::layout::{GameLayout, SlotId};
+use svccm_core::layout::SlotId;
 use svccm_core::library::{self, LegacyCcmInstall, LibraryEntry};
 use svccm_core::package::import::{extract_archive, preview_plan, ImportProgress};
 use svccm_core::package::normalize::plan_from_extracted;

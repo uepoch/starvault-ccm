@@ -9,7 +9,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::error::{pkg_err, Result};
-use crate::layout::{GameLayout, WindowsLayout};
+use crate::layout::WindowsLayout;
 use crate::store::Store;
 
 /// Result of the pre-launch verification pass.

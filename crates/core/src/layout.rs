@@ -44,29 +44,8 @@ impl SlotId {
     }
 }
 
-/// The game-directory layout contract.
-///
-/// Implementations produce every path the rest of the core needs; callers
-/// never build game paths themselves.
-pub trait GameLayout {
-    /// Install root, e.g. `C:\Program Files (x86)\StarCraft II`.
-    fn root(&self) -> &Path;
-
-    /// Path to the game executable.
-    fn exe(&self) -> PathBuf;
-
-    /// Directory holding a slot's active content.
-    fn slot_dir(&self, slot: SlotId) -> PathBuf;
-
-    /// Directories that must exist for a slot to be usable, including
-    /// sub-slots (`swarm\evolution`) and prologue directories.
-    fn slot_dirs(&self, slot: SlotId) -> Vec<PathBuf>;
-
-    /// The shared dependency namespace root.
-    fn mods_dir(&self) -> PathBuf;
-}
-
-/// Windows install layout (the only v1 target).
+/// Windows install layout (the only v1 target). Owns every game path
+/// the core needs; callers never build game paths themselves.
 #[derive(Debug, Clone)]
 pub struct WindowsLayout {
     root: PathBuf,
@@ -75,6 +54,32 @@ pub struct WindowsLayout {
 impl WindowsLayout {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
+    }
+
+    /// Install root, e.g. `C:\Program Files (x86)\StarCraft II`.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Path to the game executable.
+    pub fn exe(&self) -> PathBuf {
+        self.root.join("StarCraft II.exe")
+    }
+
+    /// Directory holding a slot's active content.
+    pub fn slot_dir(&self, slot: SlotId) -> PathBuf {
+        let base = self.root.join("Maps").join("Campaign");
+        match slot {
+            SlotId::Wol => base,
+            SlotId::HotS => base.join("swarm"),
+            SlotId::LotV => base.join("void"),
+            SlotId::Nco => base.join("nova"),
+        }
+    }
+
+    /// The shared dependency namespace root.
+    pub fn mods_dir(&self) -> PathBuf {
+        self.root.join("Mods")
     }
 
     /// Validate that `root` looks like an SC2 install (exe present).
@@ -86,38 +91,6 @@ impl WindowsLayout {
                 crate::error::EnvironmentError::GameNotFound,
             ))
         }
-    }
-}
-
-impl GameLayout for WindowsLayout {
-    fn root(&self) -> &Path {
-        &self.root
-    }
-
-    fn exe(&self) -> PathBuf {
-        self.root.join("StarCraft II.exe")
-    }
-
-    fn slot_dir(&self, slot: SlotId) -> PathBuf {
-        let base = self.root.join("Maps").join("Campaign");
-        match slot {
-            SlotId::Wol => base,
-            SlotId::HotS => base.join("swarm"),
-            SlotId::LotV => base.join("void"),
-            SlotId::Nco => base.join("nova"),
-        }
-    }
-
-    fn slot_dirs(&self, slot: SlotId) -> Vec<PathBuf> {
-        let main = self.slot_dir(slot);
-        match slot {
-            SlotId::Wol | SlotId::LotV | SlotId::Nco => vec![main],
-            SlotId::HotS => vec![main.clone(), main.join("evolution")],
-        }
-    }
-
-    fn mods_dir(&self) -> PathBuf {
-        self.root.join("Mods")
     }
 }
 
@@ -182,13 +155,5 @@ mod tests {
             vec!["Maps", "Campaign", "void"]
         );
         assert_eq!(components_after(&l.mods_dir(), &root), vec!["Mods"]);
-    }
-
-    #[test]
-    fn hots_has_an_evolution_subslot() {
-        let l = WindowsLayout::new("C:\\SC2");
-        let dirs = l.slot_dirs(SlotId::HotS);
-        assert_eq!(dirs.len(), 2);
-        assert!(dirs[1].ends_with("evolution"));
     }
 }
