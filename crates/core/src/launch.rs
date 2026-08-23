@@ -271,7 +271,7 @@ fn battlenet_running() -> bool {
 /// SC2 at boot ("an error occurred starting StarCraft II").
 const GAME_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(6);
 
-#[tracing::instrument(skip_all)]
+#[tracing::instrument(skip_all, fields(exe = %layout.exe().display()))]
 pub fn launch(layout: &WindowsLayout) -> Result<()> {
     let exe = layout.exe();
     if !exe.is_file() {
@@ -279,10 +279,24 @@ pub fn launch(layout: &WindowsLayout) -> Result<()> {
     }
     // Race guard: wait out any running/closing session before delegating —
     // the Agent must see the game fully stopped or the new instance dies.
+    // Bounded: a user keeping the game open gets an actionable error, not a
+    // hung command thread.
+    let mut observed_running = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while sc2_running() {
+        observed_running = true;
+        if std::time::Instant::now() > deadline {
+            return Err(crate::error::Error::User(crate::UserError {
+                message: "StarCraft II is still running — close it and retry".to_string(),
+                path: None,
+            }));
+        }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    std::thread::sleep(GAME_SHUTDOWN_GRACE);
+    // The grace only matters when a session was actually open moments ago.
+    if observed_running {
+        std::thread::sleep(GAME_SHUTDOWN_GRACE);
+    }
     // Preferred: delegate to the running Battle.net app ("--exec=launch S2")
     // — it presses its own Play button, so the SSO token stays inside
     // Battle.net where it belongs. Fallback: spawn the game directly with
