@@ -17,7 +17,7 @@ the same final release step. A failed gate cannot publish an updater manifest.
 
 ## Dependency audit policy
 
-JavaScript auditing uses `pnpm audit --prod --audit-level high`. Rust auditing
+JavaScript auditing uses `vp pm audit -- --prod --audit-level high`. Rust auditing
 uses cargo-audit against `Cargo.lock`.
 
 The project has one temporary RustSec exception in `.cargo/audit.toml`:

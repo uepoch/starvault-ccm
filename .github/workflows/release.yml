@@ -93,7 +93,7 @@ jobs:
       - run: vp install
         working-directory: crates/app/ui
       - name: Audit production JavaScript dependencies
-        run: pnpm audit --prod --audit-level high
+        run: vp pm audit -- --prod --audit-level high
         working-directory: crates/app/ui
 
   build-windows:

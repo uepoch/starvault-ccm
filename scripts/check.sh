@@ -43,7 +43,7 @@ echo "==> frontend tests"
 (cd crates/app/ui && vp test)
 
 echo "==> production JavaScript dependency audit"
-(cd crates/app/ui && pnpm audit --prod --audit-level high)
+(cd crates/app/ui && vp pm audit -- --prod --audit-level high)
 
 echo "==> vp build (webui)"
 (cd crates/app/ui && vp build)
