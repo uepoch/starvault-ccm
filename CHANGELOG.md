@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.4] — 2026-08-23
+
+- Crash reports (opt-in) now carry the surrounding operation: the archive,
+  package, slot, and revision in flight ship with every captured error and
+  panic.
+- Taller default window so Settings fits without scrolling.
+- Internal cleanup: ~170 lines of dead code removed, duplicated logic merged.
+
 ## [0.1.3] — 2026-08-23
 
 - Single-instance: launching the app again focuses the existing window.
