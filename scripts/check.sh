@@ -40,7 +40,7 @@ echo "==> vp check (webui fmt + lint + types)"
 (cd crates/app/ui && vp check)
 
 echo "==> frontend tests"
-(cd crates/app/ui && pnpm test --run)
+(cd crates/app/ui && vp test)
 
 echo "==> production JavaScript dependency audit"
 (cd crates/app/ui && pnpm audit --prod --audit-level high)

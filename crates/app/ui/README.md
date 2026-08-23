@@ -10,7 +10,7 @@ From this directory:
 vp install
 vp dev
 vp check
-pnpm test --run
+vp test
 vp build
 ```
 
