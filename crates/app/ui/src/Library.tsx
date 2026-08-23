@@ -303,9 +303,8 @@ export default function Library({
     columnHelper.accessor("imported_at", {
       header: "Imported",
       cell: (info) => formatDate(info.getValue()),
-      // Fit the rendered text exactly (ISO date) so the header label does
-      // not stretch the column wider than the cell content.
-      size: 0,
+      // ISO date + header label with room to breathe; the table's auto
+      // layout squeezes this column to nothing without an explicit width.
       meta: { fitContent: true },
     }),
     columnHelper.display({
@@ -592,7 +591,7 @@ export default function Library({
                         style={
                           (header.column.columnDef.meta as { fitContent?: boolean } | undefined)
                             ?.fitContent
-                            ? { width: "1%", whiteSpace: "nowrap" }
+                            ? { width: 100, whiteSpace: "nowrap" }
                             : undefined
                         }
                       >
