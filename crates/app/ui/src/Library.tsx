@@ -40,8 +40,9 @@ import {
 import { FACTION_COLORS, FACTION_TITLES, SLOTS } from "./factions";
 import ImportWizard from "./ImportWizard";
 import MigrationBanner from "./MigrationBanner";
-import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
-import { errConflict, errMessage } from "./errors";
+import ConflictDialog from "./ConflictDialog";
+import { errMessage } from "./errors";
+import { useActivate } from "./activation";
 import type { LibraryEntry } from "./types";
 
 const columnHelper = createColumnHelper<LibraryEntry>();
@@ -67,8 +68,8 @@ export default function Library({
   const [editVersion, setEditVersion] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
-  const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const { activate: runActivate, conflict, setConflict } = useActivate();
   const [search, setSearch] = useState("");
   const [factionFilter, setFactionFilter] = useState<string | null>(null);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -117,19 +118,7 @@ export default function Library({
   const activate = async (entry: LibraryEntry) => {
     setBusyId(entry.id);
     try {
-      await invoke("activate_campaign", { slot: entry.slot, id: entry.id });
-      notifications.show({
-        color: "green",
-        message: `${entry.id} activated on ${FACTION_TITLES[entry.slot] ?? entry.slot}.`,
-      });
-      refresh();
-    } catch (e) {
-      const conflictInfo = errConflict(e);
-      if (conflictInfo) {
-        setConflict({ info: conflictInfo, retrySlot: entry.slot, retryId: entry.id });
-      } else {
-        notifications.show({ color: "red", title: "Activation failed", message: errMessage(e) });
-      }
+      if (await runActivate(entry.slot, entry.id)) refresh();
     } finally {
       setBusyId(null);
     }

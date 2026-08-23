@@ -16,9 +16,10 @@ import {
   TextInput,
 } from "@mantine/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import ConflictDialog from "./ConflictDialog";
+import { useActivate } from "./activation";
 import { FACTION_COLORS, SLOTS } from "./factions";
-import { errConflict, errMessage } from "./errors";
+import { errMessage } from "./errors";
 
 interface ImportPreview {
   suggested_id: string;
@@ -66,7 +67,7 @@ export default function ImportWizard({
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [importedId, setImportedId] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
-  const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
+  const { activate: runActivate, conflict, setConflict } = useActivate();
   const opRef = useRef<string | null>(null);
   opRef.current = opId;
 
@@ -325,27 +326,9 @@ export default function ImportWizard({
                     onClick={async () => {
                       setActivating(true);
                       try {
-                        await invoke("activate_campaign", { slot, id: importedId });
-                        notifications.show({
-                          color: "green",
-                          message: `${importedId} activated on ${slot}.`,
-                        });
-                        onImported();
-                        reset();
-                      } catch (e) {
-                        const conflictInfo = errConflict(e);
-                        if (conflictInfo) {
-                          setConflict({
-                            info: conflictInfo,
-                            retrySlot: slot,
-                            retryId: importedId,
-                          });
-                        } else {
-                          notifications.show({
-                            color: "red",
-                            title: "Activation failed",
-                            message: errMessage(e),
-                          });
+                        if (await runActivate(slot, importedId)) {
+                          onImported();
+                          reset();
                         }
                       } finally {
                         setActivating(false);

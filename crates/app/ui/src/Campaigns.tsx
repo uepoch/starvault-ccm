@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { notifications } from "@mantine/notifications";
-import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
+import ConflictDialog from "./ConflictDialog";
+import { useActivate } from "./activation";
 import { FACTION_COLORS, FACTION_TITLES, FACTION_NAMES } from "./factions";
-import { errConflict, errMessage } from "./errors";
+import { errMessage } from "./errors";
 import type { LibraryEntry } from "./types";
 import {
   Alert,
@@ -123,7 +124,7 @@ export default function Campaigns() {
   const [picking, setPicking] = useState<string | null>(null);
   const [pickQuery, setPickQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const [conflict, setConflict] = useState<ConflictDialogState | null>(null);
+  const { activate: runActivate, conflict, setConflict } = useActivate();
 
   const refresh = () => {
     invoke<CampaignSlot[]>("list_campaigns")
@@ -141,22 +142,7 @@ export default function Campaigns() {
     setPicking(null);
     setBusy(`activate-${slot}`);
     try {
-      await invoke("activate_campaign", { slot, id });
-      notifications.show({
-        color: "green",
-        message: `${id} activated on ${FACTION_TITLES[slot] ?? slot}.`,
-      });
-      refresh();
-    } catch (e) {
-      const conflictInfo = errConflict(e);
-      if (conflictInfo) {
-        // M5 dialog: name both packages and the conflicting path; offer to
-        // clear the other faction.
-        setConflict({ info: conflictInfo, retrySlot: slot, retryId: id });
-      } else {
-        setError(errMessage(e));
-        notifications.show({ color: "red", title: "Activation failed", message: errMessage(e) });
-      }
+      if (await runActivate(slot, id)) refresh();
     } finally {
       setBusy(null);
     }
