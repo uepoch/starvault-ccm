@@ -10,8 +10,14 @@ interface Candidate {
 
 /// Per-campaign import list for an old SC2CCM install (P2). Old files stay
 /// in place; cleanup is manual and documented.
-export default function MigrationBanner({ onMigrated }: { onMigrated: () => void }) {
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
+export default function MigrationBanner({
+  onMigrated,
+  legacy,
+}: {
+  onMigrated: () => void;
+  legacy: { exe_hint: string | null } | null;
+}) {
+  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [slots, setSlots] = useState<Record<string, string>>({});
   const [done, setDone] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -19,10 +25,22 @@ export default function MigrationBanner({ onMigrated }: { onMigrated: () => void
   useEffect(() => {
     invoke<Candidate[]>("list_migration_candidates")
       .then(setCandidates)
-      .catch(() => {});
+      .catch(() => setCandidates([]));
   }, []);
 
-  if (candidates.length === 0) return null;
+  // Old install detected but Maps\Campaign holds no importable folders:
+  // explain why there is nothing to do and how to dismiss.
+  if (legacy && candidates?.length === 0) {
+    return (
+      <Alert title="Old SC2CCM install detected" color="yellow">
+        A legacy SC2CCM config was found
+        {legacy.exe_hint ? ` (game: ${legacy.exe_hint})` : ""}, but no old campaign folders in the
+        game's Maps\Campaign directory. Nothing to import — delete %APPDATA%\SC2CCM\SC2CCM.txt to
+        dismiss this.
+      </Alert>
+    );
+  }
+  if (!candidates || candidates.length === 0) return null;
 
   const migrate = async (candidate: Candidate) => {
     const slot = slots[candidate.path];
@@ -47,8 +65,9 @@ export default function MigrationBanner({ onMigrated }: { onMigrated: () => void
     <Alert title="Old SC2CCM campaigns found" color="yellow">
       <Stack gap="sm">
         <Text size="sm">
-          These directories in Maps\Campaign look like old CCM installs. Importing copies them into
-          the store as normal packages; the originals are left untouched.
+          These are campaigns from your old SC2CCM install. Pick the faction each was built for,
+          then Import: the campaign is copied into the library as a normal package (detected
+          metadata, editable, playable) and the originals stay untouched.
         </Text>
         {error && (
           <Text c="red" size="sm">

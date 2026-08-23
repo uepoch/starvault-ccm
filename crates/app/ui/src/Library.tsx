@@ -338,14 +338,7 @@ export default function Library({
         />
       </Group>
 
-      {legacy && (
-        <Alert title="Old SC2CCM install detected" color="yellow">
-          A legacy config was found
-          {legacy.exe_hint ? ` (game: ${legacy.exe_hint})` : ""}. Import your campaigns below.
-        </Alert>
-      )}
-
-      <MigrationBanner onMigrated={refresh} />
+      <MigrationBanner onMigrated={refresh} legacy={legacy} />
 
       {error && (
         <Alert color="red" title="Error">
