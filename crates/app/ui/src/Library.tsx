@@ -47,6 +47,15 @@ import type { LibraryEntry } from "./types";
 
 const columnHelper = createColumnHelper<LibraryEntry>();
 
+// The tab unmounts Library on switch (fresh data on return); keep the
+// user's view - search, faction filter, sort - across those unmounts.
+const lastView = {
+  search: "",
+  factionFilter: null as string | null,
+  sorting: [] as SortingState,
+  columnFilters: [] as ColumnFiltersState,
+};
+
 function formatDate(epoch: number | null): string {
   if (!epoch) return "—";
   return new Date(epoch * 1000).toISOString().slice(0, 10);
@@ -70,10 +79,16 @@ export default function Library({
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const { activate: runActivate, conflict, setConflict } = useActivate();
-  const [search, setSearch] = useState("");
-  const [factionFilter, setFactionFilter] = useState<string | null>(null);
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+  const [search, setSearch] = useState(lastView.search);
+  const [factionFilter, setFactionFilter] = useState<string | null>(lastView.factionFilter);
+  const [sorting, setSorting] = useState<SortingState>(lastView.sorting);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(lastView.columnFilters);
+  useEffect(() => {
+    lastView.search = search;
+    lastView.factionFilter = factionFilter;
+    lastView.sorting = sorting;
+    lastView.columnFilters = columnFilters;
+  }, [search, factionFilter, sorting, columnFilters]);
 
   const refresh = () => {
     invoke<LibraryEntry[]>("list_library")
