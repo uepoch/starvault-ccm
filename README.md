@@ -6,6 +6,8 @@ newer.
 
 [Download the latest alpha](https://github.com/uepoch/starvault-ccm/releases/latest)
 
+![StarVault CCM Library showing an active Legacy of the Void campaign and two inactive campaigns](docs/starvault-library.png)
+
 ## How campaign switching works
 
 StarVault keeps zero or one custom campaign active for the whole game. The
