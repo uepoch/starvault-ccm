@@ -266,13 +266,22 @@ export default function Settings() {
                 setConfirmClear(false);
                 try {
                   await invoke("clear_all_data");
+                  // Reload from the just-wiped config with the auto-save
+                  // disarmed, or the debounced save re-persists the stale
+                  // fields 700 ms later and resurrects them.
+                  loadedRef.current = false;
                   const cfg = await invoke<ConfigDto>("get_config");
                   setGameExe(cfg.game_exe ?? "");
                   setStrategy(cfg.strategy_override ?? "auto");
                   setCrashReports(cfg.crash_reports_opt_in);
+                  setLogLevel(cfg.log_level ?? "info");
+                  setSaveIsolation(cfg.save_isolation);
+                  setSavesProfile(cfg.saves_profile);
+                  loadedRef.current = true;
                   notifications.show({ color: "green", message: "All data cleared." });
                 } catch (e) {
                   notifications.show({ color: "red", title: "Clear failed", message: String(e) });
+                  loadedRef.current = true;
                 }
               }}
             >
