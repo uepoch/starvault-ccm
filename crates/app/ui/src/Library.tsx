@@ -92,7 +92,10 @@ export default function Library({
 
   const refresh = () => {
     invoke<LibraryEntry[]>("list_library")
-      .then(setEntries)
+      .then((e) => {
+        setEntries(e);
+        setError(null);
+      })
       .catch((e) => setError(String(e)));
   };
 

@@ -160,6 +160,9 @@ export default function ImportWizard({
       setStep(4);
     } catch (e) {
       setError(String(e));
+      // Back to the confirm step: the ingest op is gone backend-side, so
+      // staying on "Ingesting…" offers only a no-op cancel.
+      setStep(2);
     }
   };
 
