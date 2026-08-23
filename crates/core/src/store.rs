@@ -301,6 +301,18 @@ impl Store {
         Ok(out)
     }
 
+    /// The revision of `id` that entered the library last (ties broken by
+    /// revision id). Directory order is a content hash and means nothing;
+    /// `imported_at` is the ordering users see.
+    pub fn latest_rev(&self, id: &str) -> Result<String> {
+        self.all_manifests()?
+            .into_iter()
+            .filter(|m| m.id == id)
+            .max_by_key(|m| (m.imported_at.unwrap_or(0), m.rev.clone()))
+            .map(|m| m.rev)
+            .ok_or_else(|| pkg_err(id, "package is not installed"))
+    }
+
     /// Compute the union of `mods/**` across manifests plus every content
     /// conflict found on the way (same path case-insensitively, different
     /// bytes). One pass serves both the UI pre-check and the slot swap.

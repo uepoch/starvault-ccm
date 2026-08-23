@@ -688,22 +688,13 @@ pub async fn activate_campaign(
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store()?;
 
-    // Latest installed revision of `id`.
-    let revs: Vec<String> = store
-        .list_packages()
-        .map_err(CommandError::from)?
-        .into_iter()
-        .filter(|(pid, _, _)| pid == &id)
-        .map(|(_, rev, _)| rev)
-        .collect();
-    let rev = revs
-        .last()
-        .ok_or_else(|| CommandError::from(format!("package `{id}` is not installed")))?;
+    // Latest installed revision of `id` (by import time, not dir order).
+    let rev = store.latest_rev(&id).map_err(CommandError::from)?;
 
     // A campaign only loads through its own launcher, so the package's slot
     // is a fact, not a preference: enforce the binding at the boundary.
     let candidate = store
-        .load_manifest(&id, rev)
+        .load_manifest(&id, &rev)
         .map_err(|e| CommandError::from(e.to_string()))?;
     if candidate.slot != slot.as_str() {
         return Err(CommandError::from(format!(
@@ -768,7 +759,7 @@ pub async fn activate_campaign(
     }
 
     let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
-    if let Err(e) = manager.activate(slot, &id, rev) {
+    if let Err(e) = manager.activate(slot, &id, &rev) {
         log_op(
             &app,
             "error",
@@ -999,19 +990,9 @@ pub async fn launch_package(
     let cfg = load_config(&store_state)?;
     let layout = layout_from_config(&cfg)?;
     let store = store_state.store()?;
-
-    let revs: Vec<String> = store
-        .list_packages()
-        .map_err(CommandError::from)?
-        .into_iter()
-        .filter(|(pid, _, _)| pid == &id)
-        .map(|(_, rev, _)| rev)
-        .collect();
-    let rev = revs
-        .last()
-        .ok_or_else(|| CommandError::from(format!("package `{id}` is not installed")))?;
+    let rev = store.latest_rev(&id).map_err(CommandError::from)?;
     let candidate = store
-        .load_manifest(&id, rev)
+        .load_manifest(&id, &rev)
         .map_err(|e| CommandError::from(e.to_string()))?;
     let slot = slot_from_str(&candidate.slot)?;
 
@@ -1025,7 +1006,7 @@ pub async fn launch_package(
             .map_err(|e| CommandError::from(e.to_string()))?;
     }
     manager
-        .activate(slot, &id, rev)
+        .activate(slot, &id, &rev)
         .map_err(|e| CommandError::from(e.to_string()))?;
     for (s, prev) in &prev_owners {
         swap_saves(&app, &store, &cfg, *s, "plain", prev);
@@ -1128,17 +1109,7 @@ pub fn reveal_package(
     id: String,
 ) -> Result<String, String> {
     let store = store_state.store()?;
-    let revs: Vec<String> = store
-        .list_packages()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .filter(|(pid, _, _)| pid == &id)
-        .map(|(_, rev, _)| rev)
-        .collect();
-    let rev = revs
-        .last()
-        .ok_or_else(|| format!("package `{id}` is not installed"))?
-        .clone();
+    let rev = store.latest_rev(&id).map_err(|e| e.to_string())?;
     let manifest = store.load_manifest(&id, &rev).map_err(|e| e.to_string())?;
 
     let deploy = store
