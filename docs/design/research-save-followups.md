@@ -45,7 +45,7 @@ Mostly. Single account + single region is the common case, and 0 dirs correctly 
 
 ## Verdict
 VIABLE WITH MITIGATIONS. COPY uses no reparse points, so the KFM blocker is gone;
-the remaining risks (FoD placeholders, transient locks, mass-delete optics, churn)
+the remaining risks (Files-On-Demand placeholders, transient locks, mass-delete optics, churn)
 are all cheaply mitigable. Best case is still Blizzard's own advice: exclude
 `Documents\StarCraft II` from OneDrive entirely.
 
@@ -78,7 +78,7 @@ are all cheaply mitigable. Best case is still Blizzard's own advice: exclude
   theoretical for this user. No shell in session: ls/du not run; existence probes used.
 
 ## Mitigation sequence (ordered)
-1. Detect KFM at startup: does resolved Documents live under OneDrive? FoD attrs on Saves?
+1. Detect KFM at startup: does resolved Documents live under OneDrive? Files-On-Demand attrs on Saves?
 2. Pin Saves "Always keep on this device" (attrib +P -U) before any swap → kills (2).
 3. Sweep = MOVE (rename) into a store inside the SAME synced tree → kills (6), no churn.
 4. Materialize via write-temp + rename; bounded backoff retry on os err 32/33 per file;
