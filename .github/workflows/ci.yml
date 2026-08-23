@@ -8,6 +8,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions: {}
+
 jobs:
   # Single Rust platform: Windows is the only shipping target (SC2 is
   # Windows/macOS only). Re-add a macos job mirroring `windows` when the
@@ -15,13 +17,13 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           shared-key: svccm-ci
           cache-on-failure: true
@@ -36,10 +38,10 @@ jobs:
       run:
         working-directory: crates/app/ui
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - uses: voidzero-dev/setup-vp@v1.17.0
+      - uses: voidzero-dev/setup-vp@07d0b0e993009eb3b908ea06e49e88e933b728a2
         with:
           cache: true
       - run: vp install

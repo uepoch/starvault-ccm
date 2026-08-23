@@ -9,15 +9,14 @@ on:
         description: "Tag to release (vX.Y.Z)"
         required: true
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   # Early gate: no build starts unless the tag has a changelog entry.
   changelog-required:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - name: Check CHANGELOG.md has an entry for this tag
@@ -33,17 +32,19 @@ jobs:
   build-windows:
     needs: changelog-required
     runs-on: windows-latest
+    permissions:
+      contents: write # create the tag, release, and upload artifacts
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           shared-key: svccm-rel
           cache-on-failure: true
       # Frontend: Vite+ toolchain, then build the embedded UI.
-      - uses: voidzero-dev/setup-vp@v1.17.0
+      - uses: voidzero-dev/setup-vp@07d0b0e993009eb3b908ea06e49e88e933b728a2
         with:
           cache: true
       - run: vp install
@@ -86,7 +87,7 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Out-File -Encoding utf8NoBOM "../../target/release/bundle/latest.json"
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ inputs.version }}
           files: |
