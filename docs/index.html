@@ -3,7 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>StarVault CCM — StarCraft II custom campaign manager</title>
+    <title>StarVault CCM · StarCraft II custom campaign manager</title>
+    <meta
+      name="description"
+      content="StarVault CCM, the unworthy successor of 7Ace's CCM. Install, switch, and launch StarCraft II custom campaigns."
+    />
     <style>
       :root {
         color-scheme: dark;
@@ -17,121 +21,156 @@
           sans-serif;
       }
       main {
-        max-width: 46rem;
+        max-width: 40rem;
         margin: 0 auto;
-        padding: 4rem 1.5rem;
+        padding: 4.5rem 1.5rem 3rem;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+      .brand img {
+        width: 72px;
+        height: 72px;
+        border-radius: 14px;
+        flex-shrink: 0;
       }
       h1 {
-        font-size: 2rem;
-        margin: 0 0 0.25rem;
+        font-size: 2.1rem;
+        margin: 0;
+        line-height: 1.15;
       }
       h1 span {
         color: #4a9eff;
       }
       .tagline {
         color: #8fa3b8;
-        margin-top: 0;
+        margin: 0.25rem 0 0;
+      }
+      .tagline a {
+        color: #8fa3b8;
+      }
+      .tagline a:hover {
+        color: #dfe9f2;
+      }
+      .downloads {
+        display: flex;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+        margin: 2.25rem 0 0.5rem;
+      }
+      a.btn,
+      span.btn {
+        display: inline-block;
+        font-weight: 600;
+        padding: 0.65rem 1.4rem;
+        border-radius: 8px;
+      }
+      a.btn {
+        background: #4a9eff;
+        color: #10161d;
+        text-decoration: none;
+      }
+      a.btn:hover {
+        background: #6cb2ff;
+      }
+      span.btn.disabled {
+        background: transparent;
+        color: #5c7089;
+        border: 1px dashed #263444;
+        cursor: default;
+      }
+      .alpha-note {
+        color: #8fa3b8;
+        font-size: 0.9rem;
+        margin: 0.75rem 0 0;
       }
       h2 {
-        font-size: 1.1rem;
-        margin-top: 2.5rem;
+        font-size: 1.15rem;
+        margin: 2.75rem 0 0.75rem;
       }
       ul {
         padding-left: 1.25rem;
+        margin: 0;
       }
-      .slots {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
-        gap: 0.75rem;
-      }
-      .slot {
-        border: 1px solid #263444;
-        border-radius: 6px;
-        padding: 0.75rem;
-        text-align: center;
-      }
-      .slot b {
-        display: block;
-      }
-      .slot small {
-        color: #8fa3b8;
-      }
-      a.btn {
-        display: inline-block;
-        background: #4a9eff;
-        color: #10161d;
-        font-weight: 600;
-        padding: 0.6rem 1.4rem;
-        border-radius: 6px;
-        text-decoration: none;
+      li {
+        margin: 0.45rem 0;
       }
       footer {
-        margin-top: 3rem;
+        margin-top: 3.5rem;
         color: #8fa3b8;
         font-size: 0.85rem;
+        border-top: 1px solid #263444;
+        padding-top: 1.25rem;
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>StarVault <span>CCM</span></h1>
-      <p class="tagline">
-        Install, switch, and launch StarCraft II custom campaigns.
-      </p>
-
-      <p>
-        StarVault CCM manages your custom campaigns the way you already think
-        about them: four campaign slots, one click each. Import any community
-        package zip — any layout — and switch campaigns without touching a file
-        explorer.
-      </p>
-
-      <div class="slots">
-        <div class="slot"><b>WoL</b><small>Wings of Liberty</small></div>
-        <div class="slot"><b>HotS</b><small>Heart of the Swarm</small></div>
-        <div class="slot"><b>LotV</b><small>Legacy of the Void</small></div>
-        <div class="slot"><b>NCO</b><small>Nova Covert Ops</small></div>
+      <div class="brand">
+        <img src="logo.png" alt="StarVault CCM logo" />
+        <div>
+          <h1>StarVault <span>CCM</span></h1>
+          <p class="tagline">
+            The unworthy successor of
+            <a href="https://github.com/7thAce/SC2CCM">7Ace's CCM</a>.</p>
+        </div>
       </div>
 
-      <h2>Why it's safe</h2>
-      <ul>
-        <li>
-          <strong>No overwrites, ever.</strong> Two packages shipping different
-          content for the same dependency are caught before anything changes on
-          disk.
-        </li>
-        <li>
-          <strong>Every import is confirmed.</strong> Detected title, author,
-          and slot guess are shown for you to check — nothing is silently
-          guessed into the wrong campaign.
-        </li>
-        <li>
-          <strong>Switches are transactions.</strong> Stage, verify, swap, roll
-          back on failure. A crash mid-switch repairs itself at next startup.
-        </li>
-        <li>
-          <strong>Your old installs migrate.</strong> Existing CCM campaigns are
-          imported through the same checked pipeline; originals stay untouched.
-        </li>
-      </ul>
-
-      <h2>Download</h2>
-      <p>
+      <div class="downloads">
         <a
           class="btn"
           href="https://github.com/uepoch/starvault-ccm/releases/latest"
-          >Alpha for Windows — free download</a
+          >Download for Windows</a
         >
+        <span class="btn disabled">macOS coming soon</span>
+      </div>
+      <p class="alpha-note">
+        Alpha. If a campaign package fails to import, please
+        <a href="https://github.com/uepoch/starvault-ccm/issues">report it</a>
+        or ping me on Discord (linked in the app's Settings) with the operation
+        log.
       </p>
-      <p style="color: #8fa3b8">
-        Alpha: core flows are tested; edge-case campaign packages may still
-        trip the importer — please report them with the operation log.
-      </p>
+
+      <h2>Features</h2>
+      <ul>
+        <li>
+          <strong>Import anything the community ships.</strong> Zip or
+          drag-and-drop, packed or unpacked, nested layouts included; most
+          packages the old CCMv1 format could not handle just work.
+        </li>
+        <li>
+          <strong>Per-campaign save isolation.</strong> Saves and banks ride
+          with their mod profile, so you can safely switch between adventures
+          without losing track of progress.
+        </li>
+        <li>
+          <strong>Quick-play.</strong> One button resets the game to a clean
+          state, activates the chosen campaign, and launches it.
+        </li>
+        <li>
+          <strong>Switches are transactions.</strong> Stage, verify, swap, roll
+          back on failure; a crash mid-switch repairs itself at next startup.
+        </li>
+        <li>
+          <strong>No dependency soup.</strong> Shared <code>.SC2Mod</code>
+          files are deduplicated; two campaigns shipping different bytes for the
+          same path are caught before disk changes anything.
+        </li>
+        <li>
+          <strong>Migrates your old setup.</strong> Existing CCM campaigns
+          import through the same checked pipeline; originals stay untouched.
+        </li>
+        <li><strong>and more to come.</strong></li>
+      </ul>
 
       <footer>
         StarCraft II is a trademark of Blizzard Entertainment. This tool is
         unofficial; modified builds must self-declare as unofficial.
-        <br />Source and issue tracker: this project's repository.
+        <br />
+        <a href="https://github.com/uepoch/starvault-ccm">Source</a> ·
+        <a href="https://github.com/uepoch/starvault-ccm/releases">Releases</a>
       </footer>
     </main>
   </body>
