@@ -45,7 +45,7 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
   release (Rust std classifies junction reparse points as symlinks).
   The proposed `is_reparse_point()` "fix" would have also matched OneDrive
   cloud placeholders — a regression. No change.
-- ☐ B2 **HIGH** — slots.rs:217-236 — `restore` never redeploys the mods
+- ☑ B2 **HIGH** (this commit) — slots.rs:217-236 — `restore` never redeploys the mods
   union of remaining active slots: the restored package's `mods/**` stay in
   the game's `Mods\` forever (global namespace, stale mods keep loading).
   Fix: recompute union after clearing, remove paths absent from the new
