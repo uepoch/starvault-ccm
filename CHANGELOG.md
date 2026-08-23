@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.5] — 2026-08-23
+
+- Library table fills the window and scrolls itself with a sticky header,
+  instead of growing the page.
+- Library action buttons share one background; tooltips wait 300ms before
+  showing.
+- New landing page with download links (uepoch.github.io/starvault-ccm) and a
+  rewritten README.
+
 ## [0.1.4] — 2026-08-23
 
 - Crash reports (opt-in) now carry the surrounding operation: the archive,
