@@ -11,7 +11,7 @@ use crate::contracts::ActiveCampaign;
 use crate::error::{package_err, Result};
 use crate::layout::SlotId;
 
-pub const JOURNAL_VERSION: u32 = 5;
+pub const JOURNAL_VERSION: u32 = 6;
 pub const JOURNAL_FILE: &str = "pending-operation.json";
 const MAX_JOURNAL_BYTES: u64 = 1024 * 1024;
 

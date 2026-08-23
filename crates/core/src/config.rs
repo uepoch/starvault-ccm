@@ -27,6 +27,8 @@ pub struct Config {
     pub save_isolation: bool,
     /// Opaque discovered profile token when isolation is on.
     pub saves_profile: Option<ProfileId>,
+    /// Allow campaign activation to replace differing external Mods files.
+    pub replace_external_mods: bool,
 }
 
 impl Default for Config {
@@ -38,6 +40,7 @@ impl Default for Config {
             log_level: "info".into(),
             save_isolation: false,
             saves_profile: None,
+            replace_external_mods: false,
         }
     }
 }

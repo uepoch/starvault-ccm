@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use svccm_core::identity::PackageId;
-use svccm_core::mods::PreparedModsTransition;
+use svccm_core::mods::{ExternalModsPolicy, PreparedModsTransition};
 use svccm_core::package::normalize::plan_from_extracted;
 use svccm_core::store::{ManagedMod, ManagedModDisposition, PackageManifest, Store};
 
@@ -115,8 +115,105 @@ fn different_unowned_mod_is_rejected_without_mutation() {
         "conflict-deploy",
     )
     .unwrap_err();
-    assert_eq!(error.code(), "mods_conflict");
+    assert_eq!(error.code(), "external_mods_conflict");
     assert_eq!(std::fs::read(external).unwrap(), b"user bytes");
+}
+
+#[test]
+fn external_conflict_is_reported_before_target_mods_are_materialized() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_packed_mod(&source, "Golden", b"package bytes");
+    let manifest = ingest(&store, &source, "conflict-order");
+    let mods_root = temp.path().join("Mods");
+    std::fs::create_dir_all(&mods_root).unwrap();
+    std::fs::write(mods_root.join("Golden.SC2Mod"), b"external bytes").unwrap();
+
+    let mod_file = manifest
+        .files
+        .iter()
+        .find(|file| file.path == "mods/Golden.SC2Mod")
+        .unwrap();
+    std::fs::remove_file(
+        store
+            .root()
+            .join("blobs")
+            .join(&mod_file.sha256[..2])
+            .join(&mod_file.sha256),
+    )
+    .unwrap();
+
+    let error = PreparedModsTransition::prepare(
+        &store,
+        &mods_root,
+        &[],
+        Some(&manifest),
+        "conflict-before-staging",
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code(), "external_mods_conflict");
+    assert_eq!(
+        std::fs::read(mods_root.join("Golden.SC2Mod")).unwrap(),
+        b"external bytes"
+    );
+}
+
+#[test]
+fn explicit_external_mod_permission_replaces_the_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_packed_mod(&source, "Golden", b"package bytes");
+    let manifest = ingest(&store, &source, "replace-external");
+    let mods_root = temp.path().join("Mods");
+    std::fs::create_dir_all(&mods_root).unwrap();
+    let external = mods_root.join("Golden.SC2Mod");
+    std::fs::write(&external, b"external bytes").unwrap();
+
+    let transition = PreparedModsTransition::prepare_with_policy(
+        &store,
+        &mods_root,
+        &[],
+        Some(&manifest),
+        "replace-external",
+        ExternalModsPolicy::Replace,
+    )
+    .unwrap();
+    transition.apply().unwrap();
+    assert_eq!(std::fs::read(&external).unwrap(), b"package bytes");
+    transition.finalize().unwrap();
+}
+
+#[test]
+fn failed_external_mod_replacement_rolls_the_original_file_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_packed_mod(&source, "Golden", b"package bytes");
+    let manifest = ingest(&store, &source, "rollback-external");
+    let mods_root = temp.path().join("Mods");
+    std::fs::create_dir_all(&mods_root).unwrap();
+    let external = mods_root.join("Golden.SC2Mod");
+    std::fs::write(&external, b"external bytes").unwrap();
+
+    let transition = PreparedModsTransition::prepare_with_policy(
+        &store,
+        &mods_root,
+        &[],
+        Some(&manifest),
+        "rollback-external",
+        ExternalModsPolicy::Replace,
+    )
+    .unwrap();
+    transition.apply().unwrap();
+    transition.rollback().unwrap();
+
+    assert_eq!(std::fs::read(external).unwrap(), b"external bytes");
 }
 
 #[test]

@@ -7,6 +7,7 @@ export interface ConfigDto {
   log_level: string;
   save_isolation: boolean;
   saves_profile: string | null;
+  replace_external_mods: boolean;
 }
 
 export interface SavesProfile {

@@ -26,6 +26,7 @@ describe("Settings", () => {
       log_level: "info",
       save_isolation: true,
       saves_profile: "profile-a",
+      replace_external_mods: false,
     });
     vi.mocked(getSavesStatus).mockResolvedValue({
       supported: true,

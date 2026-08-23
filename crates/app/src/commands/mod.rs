@@ -167,6 +167,7 @@ pub(super) struct WorkflowContext {
     strategy: Option<svccm_core::config::StrategyChoice>,
     saves: Option<SavesManager>,
     save_isolation_expected: bool,
+    external_mods_policy: svccm_core::mods::ExternalModsPolicy,
 }
 
 impl WorkflowContext {
@@ -203,6 +204,11 @@ impl WorkflowContext {
             strategy: config.strategy_override,
             saves,
             save_isolation_expected: config.save_isolation,
+            external_mods_policy: if config.replace_external_mods {
+                svccm_core::mods::ExternalModsPolicy::Replace
+            } else {
+                svccm_core::mods::ExternalModsPolicy::Reject
+            },
         })
     }
 
@@ -217,12 +223,22 @@ impl WorkflowContext {
             strategy: config.strategy_override,
             saves: None,
             save_isolation_expected,
+            external_mods_policy: if config.replace_external_mods {
+                svccm_core::mods::ExternalModsPolicy::Replace
+            } else {
+                svccm_core::mods::ExternalModsPolicy::Reject
+            },
         })
+    }
+
+    pub fn replace_external_mods_for_this_operation(&mut self) {
+        self.external_mods_policy = svccm_core::mods::ExternalModsPolicy::Replace;
     }
 
     pub fn workflow(&self) -> Workflow<'_> {
         Workflow::new(&self.layout, &self.store)
             .with_strategy(self.strategy)
+            .with_external_mods_policy(self.external_mods_policy)
             .with_saves(self.saves.clone())
             .with_save_isolation_expected(self.save_isolation_expected)
     }

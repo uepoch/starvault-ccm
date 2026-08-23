@@ -55,6 +55,7 @@ function AppShell() {
         logLevel: config.log_level,
         saveIsolation: config.save_isolation,
         savesProfile: config.saves_profile,
+        replaceExternalMods: config.replace_external_mods,
       });
     } catch {
       // Install discovery is a convenience. Settings remains available when

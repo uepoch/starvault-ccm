@@ -19,6 +19,7 @@ pub struct ConfigDto {
     pub log_level: String,
     pub save_isolation: bool,
     pub saves_profile: Option<String>,
+    pub replace_external_mods: bool,
 }
 
 impl From<Config> for ConfigDto {
@@ -37,6 +38,7 @@ impl From<Config> for ConfigDto {
             saves_profile: config
                 .saves_profile
                 .map(|profile| profile.as_str().to_string()),
+            replace_external_mods: config.replace_external_mods,
         }
     }
 }
@@ -46,6 +48,7 @@ impl From<Config> for ConfigDto {
 pub struct ConfigExtras {
     pub save_isolation: Option<bool>,
     pub saves_profile: Option<String>,
+    pub replace_external_mods: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +236,9 @@ pub async fn save_config(
         log_level: log_level.clone(),
         save_isolation: extras.save_isolation.unwrap_or(previous.save_isolation),
         saves_profile: requested_profile.unwrap_or_else(|| previous.saves_profile.clone()),
+        replace_external_mods: extras
+            .replace_external_mods
+            .unwrap_or(previous.replace_external_mods),
     };
     if target.save_isolation && target.saves_profile.is_none() {
         return Err(super::error::report(

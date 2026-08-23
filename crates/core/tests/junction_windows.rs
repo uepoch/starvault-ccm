@@ -223,3 +223,48 @@ fn a_foreign_campaign_root_junction_is_never_followed() {
     assert_eq!(std::fs::read(&sentinel).unwrap(), b"outside");
     assert_junction(&layout.campaign_dir());
 }
+
+#[test]
+fn activation_reuses_a_complete_deployment_without_opening_every_map_file() {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const SHARE_NONE: u32 = 0;
+
+    let temp = tempfile::tempdir().unwrap();
+    let layout = WindowsLayout::new(temp.path().join("sc2"));
+    std::fs::create_dir_all(layout.root()).unwrap();
+    std::fs::write(layout.exe(), b"fake executable").unwrap();
+    let store_root = temp.path().join("store");
+    let store = Store::open_for_tests(&store_root).unwrap();
+    let source = temp.path().join("source");
+    let id = ingest(&store, &source, "locked-map", SlotId::Wol);
+    let workflow = || {
+        Workflow::new(&layout, &store)
+            .with_strategy(Some(StrategyChoice::Junction))
+            .with_running_probe(|| false)
+    };
+
+    workflow().activate(&id).unwrap();
+    workflow().restore_vanilla().unwrap();
+    let manifest = store.load_manifest(&id).unwrap();
+    let deployment_file = store
+        .deploy_dir(manifest.faction, &manifest.revision)
+        .unwrap()
+        .join("locked-map.SC2Map/payload.txt");
+    drop(store);
+
+    let reopened = Store::open_for_tests(&store_root).unwrap();
+    let _lock = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(SHARE_NONE)
+        .open(&deployment_file)
+        .unwrap();
+    let active = Workflow::new(&layout, &reopened)
+        .with_strategy(Some(StrategyChoice::Junction))
+        .with_running_probe(|| false)
+        .activate(&id)
+        .unwrap();
+
+    assert_eq!(active.id, id);
+    assert_junction(&layout.campaign_dir());
+}

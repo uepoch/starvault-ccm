@@ -646,11 +646,13 @@ impl Store {
         Ok(manifest)
     }
 
-    /// Load and hash every referenced blob before a deployment uses it.
+    /// Validate the manifest and every referenced blob's type and size before
+    /// deployment. Ingestion already hashes content while creating immutable
+    /// blobs; activation must not reread an entire package.
     pub fn verify_package(&self, id: &PackageId) -> Result<PackageManifest> {
         let manifest = self.read_manifest(id)?;
         for file in &manifest.files {
-            verify_blob(&self.blob_path(&file.sha256)?, &file.sha256, file.size)?;
+            verify_blob_metadata(&self.blob_path(&file.sha256)?, file.size)?;
         }
         self.manifests
             .lock()
@@ -1542,6 +1544,18 @@ fn validate_managed_mod(managed: &ManagedMod) -> Result<()> {
 }
 
 fn verify_blob(path: &Path, expected_hash: &str, expected_size: u64) -> Result<()> {
+    verify_blob_metadata(path, expected_size)?;
+    let actual_hash = hash_file(path)?;
+    if actual_hash != expected_hash {
+        return Err(package_err(
+            "corrupt_package_blob",
+            "stored package content failed SHA-256 verification",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_blob_metadata(path: &Path, expected_size: u64) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         package_err(
             "missing_package_blob",
@@ -1552,13 +1566,6 @@ fn verify_blob(path: &Path, expected_hash: &str, expected_size: u64) -> Result<(
         return Err(package_err(
             "corrupt_package_blob",
             "stored package content has the wrong file type or size",
-        ));
-    }
-    let actual_hash = hash_file(path)?;
-    if actual_hash != expected_hash {
-        return Err(package_err(
-            "corrupt_package_blob",
-            "stored package content failed SHA-256 verification",
         ));
     }
     Ok(())

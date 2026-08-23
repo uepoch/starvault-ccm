@@ -7,8 +7,8 @@
 //! tree is preserved beside it as `Campaign.starvault-plain`.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +25,7 @@ const RETRY_BASE_MS: u64 = 25;
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum TreeEntry {
     Directory,
-    File { sha256: String, size: u64 },
+    File { size: u64, modified_nanos: u128 },
     Link { target: PathBuf },
 }
 
@@ -744,8 +744,8 @@ fn verify_campaign_tree(root: &Path, manifest: &PackageManifest) -> Result<()> {
     let mut actual = BTreeMap::new();
     for (path, entry) in inventory {
         match entry {
-            TreeEntry::File { sha256, size } => {
-                actual.insert(path, (sha256, size));
+            TreeEntry::File { size, .. } => {
+                actual.insert(path, size);
             }
             TreeEntry::Link { .. } => {
                 return Err(package_err(
@@ -780,7 +780,7 @@ fn verify_campaign_tree(root: &Path, manifest: &PackageManifest) -> Result<()> {
         } else {
             format!("{prefix}/{relative}")
         };
-        expected.insert(path, (file.sha256.clone(), file.size));
+        expected.insert(path, file.size);
     }
     if actual == expected {
         Ok(())
@@ -834,8 +834,12 @@ fn inventory_tree(root: &Path, include_links: bool) -> Result<BTreeMap<String, T
                 inventory.insert(
                     relative,
                     TreeEntry::File {
-                        sha256: hash_file(&path)?,
                         size: metadata.len(),
+                        modified_nanos: metadata
+                            .modified()
+                            .ok()
+                            .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                            .map_or(0, |duration| duration.as_nanos()),
                     },
                 );
             } else {
@@ -1112,25 +1116,6 @@ fn retryable_io(error: &std::io::Error) -> bool {
             | std::io::ErrorKind::Interrupted
             | std::io::ErrorKind::WouldBlock
     ) || matches!(error.raw_os_error(), Some(5 | 32 | 33))
-}
-
-fn hash_file(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-
-    let mut file = std::fs::File::open(path)
-        .map_err(|error| user_path_err("hash_campaign_file", error.to_string(), path, true))?;
-    let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; 1024 * 1024];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| user_path_err("hash_campaign_file", error.to_string(), path, true))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex::encode(hasher.finalize()))
 }
 
 fn sha256_bytes(bytes: &[u8]) -> String {

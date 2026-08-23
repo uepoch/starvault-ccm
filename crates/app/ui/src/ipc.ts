@@ -10,8 +10,15 @@ import type {
 
 export const initialize = () => invoke<StartupReport>("initialize");
 export const listLibrary = () => invoke<LibrarySnapshot>("list_library");
-export const activatePackage = (id: string) => invoke<void>("activate_package", { id });
-export const playPackage = (id: string) => invoke<void>("play_package", { id });
+export interface ExternalModsOptions {
+  replaceExternalMods?: boolean;
+  rememberExternalMods?: boolean;
+}
+
+export const activatePackage = (id: string, options: ExternalModsOptions = {}) =>
+  invoke<void>("activate_package", { id, ...options });
+export const playPackage = (id: string, options: ExternalModsOptions = {}) =>
+  invoke<void>("play_package", { id, ...options });
 export const restoreVanilla = () => invoke<void>("restore_vanilla");
 export const repairActive = () => invoke<void>("repair_active");
 
@@ -26,6 +33,7 @@ export interface SaveConfigInput {
   logLevel: string;
   saveIsolation: boolean;
   savesProfile: string | null;
+  replaceExternalMods: boolean;
 }
 
 export const saveConfig = (input: SaveConfigInput) =>
@@ -37,6 +45,7 @@ export const saveConfig = (input: SaveConfigInput) =>
     extras: {
       saveIsolation: input.saveIsolation,
       savesProfile: input.savesProfile ?? "",
+      replaceExternalMods: input.replaceExternalMods,
     },
   });
 

@@ -32,6 +32,12 @@ pub struct PreparedModsTransition {
     plan: ModsPlan,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalModsPolicy {
+    Reject,
+    Replace,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ModsPlan {
     previous: Vec<ManagedMod>,
@@ -41,6 +47,11 @@ struct ModsPlan {
     repair: bool,
     #[serde(default)]
     repair_originals: Vec<RepairOriginal>,
+    /// External files the user explicitly allowed this operation to replace.
+    /// They remain in the operation backup for rollback, then are discarded
+    /// once the activation commits.
+    #[serde(default)]
+    replaced_external: Vec<RepairOriginal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +68,24 @@ impl PreparedModsTransition {
         target: Option<&PackageManifest>,
         operation_id: &str,
     ) -> Result<Self> {
+        Self::prepare_with_policy(
+            store,
+            mods_root,
+            previous,
+            target,
+            operation_id,
+            ExternalModsPolicy::Reject,
+        )
+    }
+
+    pub fn prepare_with_policy(
+        store: &Store,
+        mods_root: &Path,
+        previous: &[ManagedMod],
+        target: Option<&PackageManifest>,
+        operation_id: &str,
+        external_policy: ExternalModsPolicy,
+    ) -> Result<Self> {
         validate_operation_id(operation_id)?;
         verify_mods_root(mods_root)?;
         verify_managed(mods_root, previous)?;
@@ -68,10 +97,25 @@ impl PreparedModsTransition {
         std::fs::create_dir_all(backup.join(BACKUP_FILES))?;
 
         let prepared = (|| -> Result<Self> {
+            let (target_rows, mut replaced_external) =
+                plan_target(mods_root, previous, target, external_policy)?;
+            for original in &replaced_external {
+                let source = join_relative(mods_root, &original.path)?;
+                let destination = join_relative(&backup.join(BACKUP_FILES), &original.path)?;
+                copy_managed_file(mods_root, &source, &backup, &destination)?;
+                ensure_artifact_regular_file(&backup, &destination, "Mods backup")?;
+                if hash_file(&destination)? != original.sha256.as_deref().unwrap_or_default() {
+                    return Err(internal_err(
+                        "mods_backup_verification_failed",
+                        "StarVault could not back up the external Mods file",
+                        format!("backup of `{}` changed", original.path),
+                    ));
+                }
+            }
+            replaced_external.sort_by_key(|original| key(&original.path));
             if let Some(target) = target {
                 store.materialize_mods(target, &staging)?;
             }
-            let target_rows = plan_target(mods_root, previous, target)?;
             let target_by_key: BTreeMap<String, &ManagedMod> = target_rows
                 .iter()
                 .map(|managed| (key(&managed.path), managed))
@@ -107,6 +151,7 @@ impl PreparedModsTransition {
                 backed_up,
                 repair: false,
                 repair_originals: Vec::new(),
+                replaced_external,
             };
             persist_plan(&backup, &plan)?;
             let plan_path = backup.join(PLAN_FILE);
@@ -148,7 +193,13 @@ impl PreparedModsTransition {
 
         let prepared = (|| -> Result<Self> {
             store.materialize_mods(target, &staging)?;
-            let target_rows = plan_target(mods_root, previous, Some(target))?;
+            let (target_rows, replaced_external) = plan_target(
+                mods_root,
+                previous,
+                Some(target),
+                ExternalModsPolicy::Reject,
+            )?;
+            debug_assert!(replaced_external.is_empty());
             if target_rows.len() != previous.len()
                 || target_rows.iter().zip(previous).any(|(target, previous)| {
                     key(&target.path) != key(&previous.path)
@@ -221,6 +272,7 @@ impl PreparedModsTransition {
                 backed_up: Vec::new(),
                 repair: true,
                 repair_originals: originals,
+                replaced_external: Vec::new(),
             };
             persist_plan(&backup, &plan)?;
             let plan_path = backup.join(PLAN_FILE);
@@ -272,6 +324,18 @@ impl PreparedModsTransition {
 
     fn apply_standard(&self) -> Result<()> {
         verify_managed(&self.mods_root, &self.plan.previous)?;
+        for original in &self.plan.replaced_external {
+            let expected = original.sha256.as_deref().ok_or_else(|| {
+                internal_err(
+                    "mods_backup_plan_invalid",
+                    "StarVault could not replace the external Mods file",
+                    format!("external file `{}` has no recorded hash", original.path),
+                )
+            })?;
+            let path = join_relative(&self.mods_root, &original.path)?;
+            remove_managed_regular_if_hash(&self.mods_root, &path, expected)?;
+            prune_empty_parents(path.parent(), &self.mods_root)?;
+        }
         let target_by_key: BTreeMap<String, &ManagedMod> = self
             .plan
             .target
@@ -320,16 +384,8 @@ impl PreparedModsTransition {
                 &self.backup,
                 &managed.path,
             )?;
-            ensure_managed_ancestors(&self.mods_root, &destination)?;
-            if hash_file(&destination)? != managed.sha256 {
-                return Err(internal_err(
-                    "mods_deployment_verification_failed",
-                    "StarVault could not deploy the campaign Mods files",
-                    format!("deployed `{}` did not match its manifest", managed.path),
-                ));
-            }
         }
-        verify_managed(&self.mods_root, &self.plan.target)
+        verify_managed_shape(&self.mods_root, &self.plan.target)
     }
 
     fn apply_repair(&self) -> Result<()> {
@@ -361,7 +417,7 @@ impl PreparedModsTransition {
                 &managed.path,
             )?;
         }
-        verify_managed(&self.mods_root, &self.plan.target)
+        verify_managed_shape(&self.mods_root, &self.plan.target)
     }
 
     pub fn rollback(&self) -> Result<()> {
@@ -423,6 +479,7 @@ fn rollback_from_plan_preserving(mods_root: &Path, backup: &Path, plan: &ModsPla
             verify_repair_originals(mods_root, plan)?;
         } else {
             verify_managed(mods_root, &plan.previous)?;
+            verify_external_originals(mods_root, &plan.replaced_external)?;
         }
         return Ok(());
     }
@@ -494,7 +551,39 @@ fn rollback_from_plan_preserving(mods_root: &Path, backup: &Path, plan: &ModsPla
             relative,
         )?;
     }
+    for original in &plan.replaced_external {
+        let expected_hash = original.sha256.as_deref().ok_or_else(|| {
+            internal_err(
+                "mods_backup_plan_invalid",
+                "StarVault could not recover the external Mods files",
+                format!("external file `{}` has no recorded hash", original.path),
+            )
+        })?;
+        let backup_files = backup.join(BACKUP_FILES);
+        let source = join_relative(&backup_files, &original.path)?;
+        ensure_artifact_regular_file(backup, &source, "Mods backup")?;
+        if hash_file(&source)? != expected_hash {
+            return Err(package_err(
+                "recovery_required",
+                format!(
+                    "backup of external Mods file `{}` has changed",
+                    original.path
+                ),
+            ));
+        }
+        let destination = join_relative(mods_root, &original.path)?;
+        prepare_recovery_target(&destination, mods_root, &plan.target, Some(expected_hash))?;
+        copy_atomic(
+            &backup_files,
+            &source,
+            mods_root,
+            &destination,
+            backup,
+            &original.path,
+        )?;
+    }
     verify_managed(mods_root, &plan.previous)?;
+    verify_external_originals(mods_root, &plan.replaced_external)?;
     Ok(())
 }
 
@@ -534,7 +623,8 @@ fn verify_rollback_from_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -
         return if plan.repair {
             verify_repair_originals(mods_root, plan)
         } else {
-            verify_managed(mods_root, &plan.previous)
+            verify_managed(mods_root, &plan.previous)?;
+            verify_external_originals(mods_root, &plan.replaced_external)
         };
     }
     verify_rollback_plan(mods_root, backup, plan)
@@ -618,6 +708,26 @@ fn verify_rollback_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Res
         }
         verify_backed_up_destination(mods_root, relative, previous, &plan.target)?;
     }
+    for original in &plan.replaced_external {
+        let expected = original.sha256.as_deref().ok_or_else(|| {
+            internal_err(
+                "mods_backup_plan_invalid",
+                "StarVault could not recover the external Mods files",
+                format!("external file `{}` has no recorded hash", original.path),
+            )
+        })?;
+        let source = join_relative(&backup.join(BACKUP_FILES), &original.path)?;
+        ensure_artifact_regular_file(backup, &source, "Mods backup")?;
+        if hash_file(&source)? != expected {
+            return Err(package_err(
+                "recovery_required",
+                format!(
+                    "backup of external Mods file `{}` has changed",
+                    original.path
+                ),
+            ));
+        }
+    }
     let backed_up: BTreeSet<String> = plan.backed_up.iter().map(|path| key(path)).collect();
     for previous in plan
         .previous
@@ -625,6 +735,33 @@ fn verify_rollback_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Res
         .filter(|managed| !backed_up.contains(&key(&managed.path)))
     {
         verify_managed(mods_root, std::slice::from_ref(previous))?;
+    }
+    Ok(())
+}
+
+fn verify_external_originals(mods_root: &Path, originals: &[RepairOriginal]) -> Result<()> {
+    for original in originals {
+        let expected = original.sha256.as_deref().ok_or_else(|| {
+            internal_err(
+                "mods_backup_plan_invalid",
+                "StarVault could not verify the external Mods files",
+                format!("external file `{}` has no recorded hash", original.path),
+            )
+        })?;
+        let path = join_relative(mods_root, &original.path)?;
+        ensure_managed_ancestors(mods_root, &path)?;
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            user_path_err("inspect_external_mod", error.to_string(), &path, true)
+        })?;
+        if !metadata.file_type().is_file() || is_link(&metadata) || hash_file(&path)? != expected {
+            return Err(package_err(
+                "managed_file_changed",
+                format!(
+                    "external Mods file `{}` changed during recovery",
+                    original.path
+                ),
+            ));
+        }
     }
     Ok(())
 }
@@ -976,6 +1113,20 @@ fn verify_bound_backup(backup: &Path, expected_plan_sha256: &str) -> Result<Mods
             )?;
         }
     }
+    for original in &plan.replaced_external {
+        let sha256 = original.sha256.as_deref().ok_or_else(|| {
+            package_err(
+                "corrupt_operation_journal",
+                format!("external Mods backup `{}` has no hash", original.path),
+            )
+        })?;
+        insert_expected_artifact_file(
+            &mut expected_directories,
+            &mut expected_files,
+            &format!("{BACKUP_FILES}/{}", original.path.replace('\\', "/")),
+            sha256,
+        )?;
+    }
     let started = actual_files.contains_key(&key(APPLY_STARTED));
     let complete = actual_files.contains_key(&key(APPLY_COMPLETE));
     if complete && !started {
@@ -1011,8 +1162,11 @@ fn verify_bound_backup(backup: &Path, expected_plan_sha256: &str) -> Result<Mods
 }
 
 fn verify_staging_tree(staging: &Path, target: &[ManagedMod]) -> Result<()> {
-    let (actual_directories, actual_files) =
-        inventory_operation_artifact(staging, &BTreeSet::new())?;
+    let unhashed = target
+        .iter()
+        .map(|managed| key(&managed.path))
+        .collect::<BTreeSet<_>>();
+    let (actual_directories, actual_files) = inventory_operation_artifact(staging, &unhashed)?;
     let mut expected_directories = BTreeSet::new();
     let mut expected_files = BTreeMap::new();
     for managed in target {
@@ -1020,7 +1174,7 @@ fn verify_staging_tree(staging: &Path, target: &[ManagedMod]) -> Result<()> {
             &mut expected_directories,
             &mut expected_files,
             &managed.path,
-            &managed.sha256,
+            "",
         )?;
     }
     verify_expected_artifact_tree(
@@ -1248,6 +1402,27 @@ pub fn verify_managed(mods_root: &Path, managed: &[ManagedMod]) -> Result<()> {
     Ok(())
 }
 
+/// Validate only the journal-owned filesystem shape. Full content hashing is
+/// reserved for startup health and checks performed before deleting a managed
+/// file; freshly copied bytes already come from the immutable package store.
+pub(crate) fn verify_managed_shape(mods_root: &Path, managed: &[ManagedMod]) -> Result<()> {
+    verify_mods_root(mods_root)?;
+    for managed in managed {
+        let path = join_relative(mods_root, &managed.path)?;
+        ensure_managed_ancestors(mods_root, &path)?;
+        let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
+            user_path_err("inspect_managed_mod", error.to_string(), &path, true)
+        })?;
+        if !metadata.file_type().is_file() || is_link(&metadata) {
+            return Err(changed_managed_error(
+                managed,
+                format!("managed Mods file `{}` changed shape", managed.path),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn verify_mods_root(mods_root: &Path) -> Result<()> {
     match std::fs::symlink_metadata(mods_root) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -1406,7 +1581,8 @@ fn plan_target(
     mods_root: &Path,
     previous: &[ManagedMod],
     target: Option<&PackageManifest>,
-) -> Result<Vec<ManagedMod>> {
+    external_policy: ExternalModsPolicy,
+) -> Result<(Vec<ManagedMod>, Vec<RepairOriginal>)> {
     let previous_by_key: BTreeMap<String, &ManagedMod> = previous
         .iter()
         .map(|managed| (key(&managed.path), managed))
@@ -1422,20 +1598,38 @@ fn plan_target(
         .collect();
     let desired_keys: BTreeSet<String> = desired.iter().map(|(path, _)| key(path)).collect();
     let mut rows = Vec::with_capacity(desired.len());
+    let mut replaced_external = Vec::new();
     for (path, sha256) in desired {
-        let disposition = match previous_by_key.get(&key(&path)) {
-            Some(previous) if previous.sha256 == sha256 => previous.disposition,
+        let (disposition, replaced) = match previous_by_key.get(&key(&path)) {
+            Some(previous) if previous.sha256 == sha256 => (previous.disposition, None),
             Some(previous) if previous.disposition == ManagedModDisposition::Created => {
-                ManagedModDisposition::Created
+                (ManagedModDisposition::Created, None)
             }
+            Some(previous) if external_policy == ExternalModsPolicy::Replace => (
+                ManagedModDisposition::Created,
+                Some(RepairOriginal {
+                    path: path.clone(),
+                    sha256: Some(previous.sha256.clone()),
+                }),
+            ),
             Some(_) => {
                 return Err(package_err(
-                    "mods_conflict",
-                    format!("borrowed Mods file `{path}` cannot be replaced"),
+                    "external_mods_conflict",
+                    format!("borrowed Mods file `{path}` cannot be replaced without permission"),
                 ));
             }
-            None => classify_unmanaged_target(mods_root, &path, &sha256, previous, &desired_keys)?,
+            None => classify_unmanaged_target(
+                mods_root,
+                &path,
+                &sha256,
+                previous,
+                &desired_keys,
+                external_policy,
+            )?,
         };
+        if let Some(replaced) = replaced {
+            replaced_external.push(replaced);
+        }
         rows.push(ManagedMod {
             path,
             sha256,
@@ -1443,7 +1637,7 @@ fn plan_target(
         });
     }
     rows.sort_by_key(|managed| key(&managed.path));
-    Ok(rows)
+    Ok((rows, replaced_external))
 }
 
 fn classify_unmanaged_target(
@@ -1452,7 +1646,8 @@ fn classify_unmanaged_target(
     sha256: &str,
     previous: &[ManagedMod],
     desired_keys: &BTreeSet<String>,
-) -> Result<ManagedModDisposition> {
+    external_policy: ExternalModsPolicy,
+) -> Result<(ManagedModDisposition, Option<RepairOriginal>)> {
     let target = join_relative(mods_root, relative)?;
     inspect_ancestors(mods_root, &target, previous)?;
     match std::fs::symlink_metadata(&target) {
@@ -1462,7 +1657,7 @@ fn classify_unmanaged_target(
                 std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
             ) =>
         {
-            Ok(ManagedModDisposition::Created)
+            Ok((ManagedModDisposition::Created, None))
         }
         Err(error) => Err(user_path_err(
             "inspect_mods_target",
@@ -1471,11 +1666,20 @@ fn classify_unmanaged_target(
             true,
         )),
         Ok(metadata) if metadata.file_type().is_file() && !is_link(&metadata) => {
-            if hash_file(&target)? == sha256 {
-                Ok(ManagedModDisposition::Borrowed)
+            let actual = hash_file(&target)?;
+            if actual == sha256 {
+                Ok((ManagedModDisposition::Borrowed, None))
+            } else if external_policy == ExternalModsPolicy::Replace {
+                Ok((
+                    ManagedModDisposition::Created,
+                    Some(RepairOriginal {
+                        path: relative.to_string(),
+                        sha256: Some(actual),
+                    }),
+                ))
             } else {
                 Err(package_err(
-                    "mods_conflict",
+                    "external_mods_conflict",
                     format!("an external Mods file already occupies `{relative}`"),
                 ))
             }
@@ -1495,7 +1699,7 @@ fn classify_unmanaged_target(
                     })
                 });
             if all_replaceable {
-                Ok(ManagedModDisposition::Created)
+                Ok((ManagedModDisposition::Created, None))
             } else {
                 Err(package_err(
                     "mods_conflict",

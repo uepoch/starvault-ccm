@@ -67,6 +67,7 @@ function renderLibrary() {
 
 describe("Library", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(listLibrary).mockResolvedValue(readySnapshot);
     vi.mocked(repairActive).mockResolvedValue(undefined);
   });

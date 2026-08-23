@@ -37,6 +37,7 @@ export default function Settings() {
   const [logLevel, setLogLevel] = useState("info");
   const [saveIsolation, setSaveIsolation] = useState(false);
   const [savesProfile, setSavesProfile] = useState<string | null>(null);
+  const [replaceExternalMods, setReplaceExternalMods] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   const [savesStatus, setSavesStatus] = useState<SavesStatus | null>(null);
@@ -63,6 +64,7 @@ export default function Settings() {
       setLogLevel(config.log_level ?? "info");
       setSaveIsolation(config.save_isolation);
       setSavesProfile(config.saves_profile);
+      setReplaceExternalMods(config.replace_external_mods);
       setSavesStatus(saves);
       setLibrary(librarySnapshot);
       setStatus("idle");
@@ -98,6 +100,7 @@ export default function Settings() {
             logLevel,
             saveIsolation,
             savesProfile,
+            replaceExternalMods,
           });
           setStatus("saved");
           setErrorMsg(null);
@@ -116,7 +119,7 @@ export default function Settings() {
         autosaveTimerRef.current = null;
       }
     };
-  }, [gameExe, strategy, crashReports, logLevel, saveIsolation, savesProfile]);
+  }, [gameExe, strategy, crashReports, logLevel, saveIsolation, savesProfile, replaceExternalMods]);
 
   const quiesceAutosave = useCallback(async () => {
     loadedRef.current = false;
@@ -249,6 +252,12 @@ export default function Settings() {
                 ]}
                 value={logLevel}
                 onChange={(value) => setLogLevel(value ?? "info")}
+              />
+              <Switch
+                label="Replace conflicting external Mods automatically"
+                description="Permanently replaces different files already in StarCraft II\\Mods. Failed activations roll back, but Return to vanilla cannot restore the replaced external file."
+                checked={replaceExternalMods}
+                onChange={(event) => setReplaceExternalMods(event.currentTarget.checked)}
               />
               <Switch
                 label="Save isolation (Beta)"

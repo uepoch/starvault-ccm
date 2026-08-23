@@ -48,15 +48,31 @@ pub async fn activate_package(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
+    replace_external_mods: Option<bool>,
+    remember_external_mods: Option<bool>,
 ) -> CommandResult<()> {
     let package_id = super::error::map(&app, &state, "activate_package", PackageId::parse(id))?;
     let _mutation = state.mutation.lock().await;
-    let context = super::error::map(
+    let mut config =
+        super::error::map(&app, &state, "activate_package", super::load_config(&state))?;
+    if remember_external_mods == Some(true) && !config.replace_external_mods {
+        config.replace_external_mods = true;
+        super::error::map(
+            &app,
+            &state,
+            "activate_package",
+            config.save(&state.config_path),
+        )?;
+    }
+    let mut context = super::error::map(
         &app,
         &state,
         "activate_package",
-        WorkflowContext::configured(&app, &state),
+        WorkflowContext::from_config(&app, &state, &config, true),
     )?;
+    if replace_external_mods == Some(true) {
+        context.replace_external_mods_for_this_operation();
+    }
     let active = super::error::blocking(&app, &state, "activate_package", move || {
         context.workflow().activate(&package_id)
     })
@@ -75,15 +91,30 @@ pub async fn play_package(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
     id: String,
+    replace_external_mods: Option<bool>,
+    remember_external_mods: Option<bool>,
 ) -> CommandResult<()> {
     let package_id = super::error::map(&app, &state, "play_package", PackageId::parse(id))?;
     let _mutation = state.mutation.lock().await;
-    let context = super::error::map(
+    let mut config = super::error::map(&app, &state, "play_package", super::load_config(&state))?;
+    if remember_external_mods == Some(true) && !config.replace_external_mods {
+        config.replace_external_mods = true;
+        super::error::map(
+            &app,
+            &state,
+            "play_package",
+            config.save(&state.config_path),
+        )?;
+    }
+    let mut context = super::error::map(
         &app,
         &state,
         "play_package",
-        WorkflowContext::configured(&app, &state),
+        WorkflowContext::from_config(&app, &state, &config, true),
     )?;
+    if replace_external_mods == Some(true) {
+        context.replace_external_mods_for_this_operation();
+    }
     let active = super::error::blocking(&app, &state, "play_package", move || {
         context.workflow().play(&package_id)
     })

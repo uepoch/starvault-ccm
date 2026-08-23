@@ -16,7 +16,7 @@ use crate::contracts::{
 use crate::error::{internal_err, package_err, user_err, EnvironmentError, Error, Result};
 use crate::identity::PackageId;
 use crate::layout::WindowsLayout;
-use crate::mods::{self, PreparedModsTransition};
+use crate::mods::{self, ExternalModsPolicy, PreparedModsTransition};
 use crate::operation::{
     OperationKind, OperationPaths, OperationPhase, PendingOperation, SlotOperationJournal,
     SlotOperationPaths,
@@ -53,6 +53,7 @@ pub struct Workflow<'a> {
     layout: &'a WindowsLayout,
     store: &'a Store,
     strategy: Option<StrategyChoice>,
+    external_mods_policy: ExternalModsPolicy,
     saves: Option<SavesManager>,
     save_isolation_expected: bool,
     running_probe: Arc<dyn Fn() -> bool + Send + Sync>,
@@ -67,6 +68,7 @@ impl<'a> Workflow<'a> {
             layout,
             store,
             strategy: None,
+            external_mods_policy: ExternalModsPolicy::Reject,
             saves: None,
             save_isolation_expected: false,
             running_probe: Arc::new(crate::launch::sc2_running),
@@ -78,6 +80,11 @@ impl<'a> Workflow<'a> {
 
     pub fn with_strategy(mut self, strategy: Option<StrategyChoice>) -> Self {
         self.strategy = strategy;
+        self
+    }
+
+    pub fn with_external_mods_policy(mut self, policy: ExternalModsPolicy) -> Self {
+        self.external_mods_policy = policy;
         self
     }
 
@@ -513,12 +520,13 @@ impl<'a> Workflow<'a> {
             self.fail(FailurePoint::SlotsPrepared)?;
 
             self.ensure_mutation_checkpoint()?;
-            let mods = PreparedModsTransition::prepare(
+            let mods = PreparedModsTransition::prepare_with_policy(
                 self.store,
                 &self.layout.mods_dir(),
                 &previous_mods,
                 target_manifest.as_ref(),
                 &operation_id,
+                self.external_mods_policy,
             )?;
             self.fail(FailurePoint::ModsPrepared)?;
             Ok((saves, slots, mods))
@@ -822,7 +830,7 @@ impl<'a> Workflow<'a> {
             journal.previous_campaign.is_some(),
             journal.target_campaign.is_some(),
         )?;
-        self.verify_state_ready(journal.target_campaign.as_ref())?;
+        self.verify_state_shape_ready(journal.target_campaign.as_ref())?;
         self.ensure_mutation_checkpoint()?;
         slots::finalize_preverified_paths(&journal.paths.slots)?;
         self.ensure_mutation_checkpoint()?;
@@ -1120,6 +1128,20 @@ impl<'a> Workflow<'a> {
     }
 
     fn verify_state(&self, expected: Option<&ActiveCampaign>) -> Result<()> {
+        self.verify_state_with_mods(expected, true)
+    }
+
+    fn verify_state_shape_ready(&self, expected: Option<&ActiveCampaign>) -> Result<()> {
+        self.verify_state_with_mods(expected, false)?;
+        self.cache_ready();
+        Ok(())
+    }
+
+    fn verify_state_with_mods(
+        &self,
+        expected: Option<&ActiveCampaign>,
+        verify_mod_contents: bool,
+    ) -> Result<()> {
         if let Some(probe) = &self.verification_probe {
             probe();
         }
@@ -1157,7 +1179,11 @@ impl<'a> Workflow<'a> {
             self.store
                 .verify_managed_mods_manifest(manifest, &managed)?;
         }
-        mods::verify_managed(&self.layout.mods_dir(), &managed)
+        if verify_mod_contents {
+            mods::verify_managed(&self.layout.mods_dir(), &managed)
+        } else {
+            mods::verify_managed_shape(&self.layout.mods_dir(), &managed)
+        }
     }
 
     fn verify_state_ready(&self, expected: Option<&ActiveCampaign>) -> Result<()> {

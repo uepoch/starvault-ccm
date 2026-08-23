@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   Center,
+  Checkbox,
   Group,
   Loader,
   Modal,
@@ -86,6 +87,12 @@ export default function Library({
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pageBusy, setPageBusy] = useState<string | null>(null);
+  const [externalConflict, setExternalConflict] = useState<{
+    action: "activate" | "play";
+    entry: Pick<LibraryEntry, "id" | "title">;
+    error: CommandError;
+  } | null>(null);
+  const [rememberExternalMods, setRememberExternalMods] = useState(false);
   const [search, setSearch] = useState(lastView.search);
   const [factionFilter, setFactionFilter] = useState<string | null>(lastView.factionFilter);
   const [sorting, setSorting] = useState<SortingState>(lastView.sorting);
@@ -152,7 +159,46 @@ export default function Library({
       notifications.show({ color: "green", message: `${entry.title ?? entry.id} is active.` });
       await refresh();
     } catch (error) {
-      setOperationError(toCommandError(error));
+      const commandError = toCommandError(error);
+      if (commandError.code === "external_mods_conflict") {
+        setRememberExternalMods(false);
+        setExternalConflict({ action: "activate", entry, error: commandError });
+      } else {
+        setOperationError(commandError);
+      }
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const retryWithExternalReplacement = async () => {
+    if (!externalConflict) return;
+    const { action, entry } = externalConflict;
+    setBusyId(entry.id);
+    setOperationError(null);
+    try {
+      const options = {
+        replaceExternalMods: true,
+        rememberExternalMods,
+      };
+      if (action === "activate") {
+        await activatePackage(entry.id, options);
+      } else {
+        await playPackage(entry.id, options);
+      }
+      notifications.show({
+        color: "green",
+        message:
+          action === "activate"
+            ? `${entry.title ?? entry.id} is active.`
+            : `${entry.title ?? entry.id} is launching.`,
+      });
+      setExternalConflict(null);
+      await refresh();
+    } catch (error) {
+      const commandError = toCommandError(error);
+      setExternalConflict(null);
+      setOperationError(commandError);
     } finally {
       setBusyId(null);
     }
@@ -166,7 +212,13 @@ export default function Library({
       notifications.show({ color: "green", message: `${entry.title ?? entry.id} is launching.` });
       await refresh();
     } catch (error) {
-      setOperationError(toCommandError(error));
+      const commandError = toCommandError(error);
+      if (commandError.code === "external_mods_conflict") {
+        setRememberExternalMods(false);
+        setExternalConflict({ action: "play", entry, error: commandError });
+      } else {
+        setOperationError(commandError);
+      }
     } finally {
       setBusyId(null);
     }
@@ -564,6 +616,39 @@ export default function Library({
           </Table>
         </Card>
       )}
+
+      <Modal
+        opened={externalConflict !== null}
+        onClose={() => setExternalConflict(null)}
+        title="Replace external Mods file?"
+        size="md"
+      >
+        <Stack gap="sm">
+          <Text size="sm">{externalConflict?.error.message}</Text>
+          <Alert color="yellow" title="This replacement is permanent">
+            StarVault keeps a recovery copy while this operation is running, so a failed activation
+            can roll back. After activation commits, Return to vanilla removes the campaign file but
+            cannot restore the external file it replaced.
+          </Alert>
+          <Checkbox
+            label="Don't ask again; replace future external Mods conflicts automatically"
+            checked={rememberExternalMods}
+            onChange={(event) => setRememberExternalMods(event.currentTarget.checked)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setExternalConflict(null)}>
+              Cancel
+            </Button>
+            <Button
+              color="yellow"
+              loading={externalConflict !== null && busyId === externalConflict.entry.id}
+              onClick={retryWithExternalReplacement}
+            >
+              Replace and {externalConflict?.action === "play" ? "play" : "activate"}
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
 
       <Modal
         opened={removing !== null}
