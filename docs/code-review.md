@@ -51,13 +51,11 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
   Fix: recompute union after clearing, remove paths absent from the new
   union, then `apply_mods_union`. Needs a "union can shrink" step
   (`apply_mods_union` only adds/overwrites). Add core test.
-- ☐ B3 **MED** — launch.rs:285 — `GAME_SHUTDOWN_GRACE` sleeps 6 s
+- ☑ B3 **MED** (3fb91e4) — launch.rs:285 — `GAME_SHUTDOWN_GRACE` sleeps 6 s
   unconditionally; sleep only when a running instance was observed.
-- ☐ B4 **MED** — launch.rs:282 — unbounded `while sc2_running()` wait; bound
+- ☑ B4 **MED** (3fb91e4) — launch.rs:282 — unbounded `while sc2_running()` wait; bound
   (~60 s) and return a UserError.
-- ☐ B5 **MED** — tracing gaps: spans missing on `remove_package`,
-  `set_metadata`, `saves::swap` (highest-stakes data), `remove_sets`,
-  `reconcile`; `launch` span lacks `exe` field; `swap` lacks slot/rev.
+- ☑ B5 **MED** (3fb91e4, 708e68b) — spans on remove_package, set_metadata, saves::swap/remove_sets, reconcile; launch carries exe; slot swap carries slot+rev.
 - ☐ B6 **MED** — saves.rs:200-239 — `sweep_into` uses `fs::rename`; EXDEV
   on relocated-Documents multi-volume setups; fall back to copy on
   `CrossesDevices`.
@@ -99,11 +97,8 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
   lexicographic hash order; with 2+ revisions activate/launch/reveal act on
   a stale revision. Fix: core helper `Store::latest_rev` (max by
   `imported_at`), collapses the three duplicated blocks.
-- ☐ C3 **MED** — campaigns_cache is write-only (dead cache); add the
-  list_library-style read short-circuit or delete it.
-- ☐ C4 **MED** — telemetry.rs — `set_enabled(true)` re-runs `sentry::init`
-  on every save_config; leaked client + transport thread each time. Fix:
-  early-return when the flag did not change.
+- ☑ C3 **MED** (603863d) — campaigns cache now serves reads; mutations invalidate.
+- ☑ C4 **MED** (b4644cb) — set_enabled early-returns on unchanged state; no leaked clients.
 - ☐ C5 **MED** — error-path `log_op` missing on launch_package,
   launch_game, launch_battlenet, remove_package, edit_package_metadata,
   migrate_candidate, save_config — failures invisible in support log AND
