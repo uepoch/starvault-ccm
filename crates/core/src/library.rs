@@ -110,7 +110,7 @@ pub fn migration_candidates(layout: &WindowsLayout) -> Vec<MigrationCandidate> {
             continue;
         }
         let lower = name.to_ascii_lowercase();
-        if matches!(lower.as_str(), "swarm" | "void" | "voidprologue" | "nova") {
+        if crate::layout::SLOT_OWNED_SIBLINGS.contains(&lower.as_str()) {
             continue; // slot-owned locations, never migrations
         }
         // Crash-recovery leftovers are not campaigns.

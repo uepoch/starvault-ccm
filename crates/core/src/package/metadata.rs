@@ -74,7 +74,11 @@ impl LegacyMetadata {
                 continue;
             };
             let key = key.trim().to_ascii_lowercase();
-            let value = value.trim().to_string();
+            let value = value.trim();
+            // Empty values are absent values: `title=` must not become an
+            // empty title (or, via slug, an empty package id).
+            let value = (!value.is_empty()).then(|| value.to_string());
+            let Some(value) = value else { continue };
             match key.as_str() {
                 "title" => meta.title = Some(value),
                 "author" => meta.author = Some(value),

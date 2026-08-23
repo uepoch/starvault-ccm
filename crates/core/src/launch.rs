@@ -133,7 +133,7 @@ fn check_mods_paths(
 
 /// Directory names under the shared Campaign root that belong to other
 /// slots — never counted as WoL content.
-const EXCLUDE_SIBLINGS: [&str; 4] = ["swarm", "void", "voidprologue", "nova"];
+const EXCLUDE_SIBLINGS: [&str; 4] = crate::layout::SLOT_OWNED_SIBLINGS;
 
 fn count_files(dir: &Path, shared_root: bool) -> usize {
     let mut count = 0usize;

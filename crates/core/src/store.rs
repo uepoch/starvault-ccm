@@ -258,6 +258,7 @@ impl Store {
         Ok(())
     }
 
+    /// Load a stored manifest.
     pub fn load_manifest(&self, id: &str, rev: &str) -> Result<PackageManifest> {
         {
             let manifests = self.manifests.lock().expect("manifest cache poisoned");

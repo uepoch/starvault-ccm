@@ -5,6 +5,12 @@
 
 use std::path::{Path, PathBuf};
 
+/// Campaigns-directory siblings owned by the game's own campaign slots —
+/// never user content, never migration candidates, never counted as mod
+/// files. Single source: slots (WoL reset), launch (drift check), library
+/// (migration scan) all read this.
+pub const SLOT_OWNED_SIBLINGS: [&str; 4] = ["swarm", "void", "voidprologue", "nova"];
+
 /// The four campaign slots the game reads. Order is display order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlotId {

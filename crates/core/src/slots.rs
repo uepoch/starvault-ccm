@@ -400,7 +400,11 @@ fn cleanup_if_exists(path: &Path) -> bool {
 
 /// Directories inside `Maps\Campaign` that belong to other slots and must
 /// survive a WoL clear (same protection list as the old tool, minus bugs).
-const PROTECTED_SIBLINGS: [&str; 5] = ["swarm", "swarm\\evolution", "void", "voidprologue", "nova"];
+/// Kept by `clear_dir_contents` when resetting WoL's shared root. Same
+/// list as [`crate::layout::SLOT_OWNED_SIBLINGS`]; the historic
+/// `swarm\\evolution` entry was dead (an entry name never contains a
+/// separator).
+const PROTECTED_SIBLINGS: [&str; 4] = crate::layout::SLOT_OWNED_SIBLINGS;
 
 fn clear_dir_contents(dir: &Path, protect: &[&str]) -> Result<()> {
     if !dir.exists() {
