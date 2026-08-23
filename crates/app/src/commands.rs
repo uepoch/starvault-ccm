@@ -544,6 +544,7 @@ pub struct ConfigExtras {
 /// Persist settings; the game exe must exist when provided.
 #[tauri::command]
 pub async fn save_config(
+    app: AppHandle,
     store_state: tauri::State<'_, AppState>,
     game_exe: Option<String>,
     strategy_override: Option<String>,
@@ -569,12 +570,18 @@ pub async fn save_config(
         // The exact file the user typed must exist — a typo in the file name
         // must not pass just because its parent folder looks like an install.
         if !exe.is_file() {
-            return Err(format!("no executable found at {}", exe.display()));
+            return Err(fail(
+                &app,
+                "config",
+                format!("no executable found at {}", exe.display()),
+            ));
         }
-        let root = exe.parent().ok_or("game path has no parent directory")?;
+        let root = exe
+            .parent()
+            .ok_or_else(|| fail(&app, "config", "game path has no parent directory"))?;
         WindowsLayout::new(root)
             .validate()
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| fail(&app, "config", e))?;
     }
     cfg.strategy_override = match strategy_override.as_deref() {
         Some("junction") => Some(StrategyChoice::Junction),
@@ -589,7 +596,7 @@ pub async fn save_config(
     }
     set_log_level(&cfg.log_level);
     crate::telemetry::set_enabled(cfg.crash_reports_opt_in);
-    persist_config(&store_state, &cfg)
+    persist_config(&store_state, &cfg).map_err(|e| fail(&app, "config", e))
 }
 
 /// One slot card on the Campaigns screen.
@@ -907,6 +914,14 @@ pub(crate) fn log_op(app: &AppHandle, level: &str, kind: &str, detail: &str) {
     }
 }
 
+/// Log a command failure (support log + Sentry ride-along) and pass the
+/// message through to the caller.
+fn fail(app: &AppHandle, kind: &str, e: impl std::fmt::Display) -> String {
+    let msg = e.to_string();
+    log_op(app, "error", kind, &msg);
+    msg
+}
+
 /// Recent operations, newest first (the support artifact).
 #[tauri::command]
 pub fn read_log(app: AppHandle, limit: usize) -> Result<Vec<LogEntry>, String> {
@@ -983,7 +998,7 @@ pub fn launch_game(app: AppHandle, store_state: tauri::State<'_, AppState>) -> R
     let layout = layout_from_config(&cfg)?;
     launch::launch(&layout)
         .map(|()| log_op(&app, "info", "launch", "game started"))
-        .map_err(|e| e.to_string())
+        .map_err(|e| fail(&app, "launch", e))
 }
 
 /// One-click play from the Library: restore every active faction to plain,
@@ -1002,7 +1017,7 @@ pub async fn launch_package(
     let rev = store.latest_rev(&id).map_err(CommandError::from)?;
     let candidate = store
         .load_manifest(&id, &rev)
-        .map_err(|e| CommandError::from(e.to_string()))?;
+        .map_err(|e| CommandError::from(fail(&app, "launch", e)))?;
     let slot = slot_from_str(&candidate.slot)?;
 
     let manager = SlotManager::new(&layout, &store).with_strategy(cfg.strategy_override);
@@ -1012,11 +1027,11 @@ pub async fn launch_package(
         prev_owners.push((s, active_id));
         manager
             .restore(s)
-            .map_err(|e| CommandError::from(e.to_string()))?;
+            .map_err(|e| CommandError::from(fail(&app, "launch", e)))?;
     }
     manager
         .activate(slot, &id, &rev)
-        .map_err(|e| CommandError::from(e.to_string()))?;
+        .map_err(|e| CommandError::from(fail(&app, "launch", e)))?;
     for (s, prev) in &prev_owners {
         swap_saves(&app, &store, &cfg, *s, "plain", prev);
     }
@@ -1026,7 +1041,7 @@ pub async fn launch_package(
         .map(|(_, o)| o.clone())
         .unwrap_or_else(|| "plain".into());
     swap_saves(&app, &store, &cfg, slot, &id, &prev_owner);
-    launch::launch(&layout).map_err(|e| CommandError::from(e.to_string()))?;
+    launch::launch(&layout).map_err(|e| CommandError::from(fail(&app, "launch", e)))?;
 
     log_op(
         &app,
@@ -1047,7 +1062,7 @@ pub async fn launch_package(
 pub fn launch_battlenet(app: AppHandle) -> Result<(), String> {
     launch::launch_battlenet()
         .map(|()| log_op(&app, "info", "launch", "battlenet:// fallback"))
-        .map_err(|e| e.to_string())
+        .map_err(|e| fail(&app, "launch", e))
 }
 
 // --- migration (P2) ----------------------------------------------------------
@@ -1087,14 +1102,14 @@ pub fn migrate_candidate(
     let slot = slot_from_str(&slot)?;
     let src = PathBuf::from(&path);
     if !src.is_dir() {
-        return Err(format!("not a directory: {path}"));
+        return Err(fail(&app, "migrate", format!("not a directory: {path}")));
     }
-    let plan = plan_from_extracted(&src).map_err(|e| e.to_string())?;
+    let plan = plan_from_extracted(&src).map_err(|e| fail(&app, "migrate", e))?;
     let store = store_state.store()?;
     let rev = store
         .ingest_with_progress(&id, slot, &plan, |_| true)
-        .map_err(|e| e.to_string())?
-        .ok_or("migration cancelled")?;
+        .map_err(|e| fail(&app, "migrate", e))?
+        .ok_or_else(|| fail(&app, "migrate", "migration cancelled"))?;
     log_op(&app, "info", "migrate", &format!("{id} from {path}"));
     invalidate_library(&cache);
     invalidate_campaigns(&store_state);
@@ -1114,12 +1129,15 @@ pub fn discover_game_exe() -> Option<String> {
 /// the game's faction directory. Returns the path opened.
 #[tauri::command]
 pub fn reveal_package(
+    app: AppHandle,
     store_state: tauri::State<'_, AppState>,
     id: String,
 ) -> Result<String, String> {
     let store = store_state.store()?;
-    let rev = store.latest_rev(&id).map_err(|e| e.to_string())?;
-    let manifest = store.load_manifest(&id, &rev).map_err(|e| e.to_string())?;
+    let rev = store.latest_rev(&id).map_err(|e| fail(&app, "launch", e))?;
+    let manifest = store
+        .load_manifest(&id, &rev)
+        .map_err(|e| fail(&app, "launch", e))?;
 
     let deploy = store
         .root()
@@ -1151,7 +1169,9 @@ pub fn remove_package(
     id: String,
 ) -> Result<(), String> {
     let store = store_state.store()?;
-    store.remove_package(&id).map_err(|e| e.to_string())?;
+    store
+        .remove_package(&id)
+        .map_err(|e| fail(&app, "remove", e))?;
     // Save sets belong to the package; reclaim them with it.
     if let Some(live) = live_saves(&app, &load_config(&store_state)?).ok().flatten() {
         let mgr = SavesManager::new(live, store.root());
@@ -1186,7 +1206,7 @@ pub fn edit_package_metadata(
     let store = store_state.store()?;
     store
         .set_metadata(&id, &title, &author, &version, &desc)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| fail(&app, "edit", e))?;
     log_op(&app, "info", "edit", &format!("updated metadata of {id}"));
     invalidate_library(&cache);
     Ok(())
