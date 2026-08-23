@@ -38,7 +38,7 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 
 ### B. Rust core (from reviewer + lens)
 
-- ☐ B1 ~~**HIGH**~~ **REFUTED** — reviewer claimed `is_symlink()` is false
+- ☑ B1 ~~**HIGH**~~ **REFUTED** — reviewer claimed `is_symlink()` is false
   for NTFS junctions. Empirical evidence contradicts it: the Windows CI
   test `junction_swap_points_at_deploy_tree_and_reads_through` asserts
   `is_symlink() == true` on a live junction slot and has passed on every
@@ -56,26 +56,25 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 - ☑ B4 **MED** (3fb91e4) — launch.rs:282 — unbounded `while sc2_running()` wait; bound
   (~60 s) and return a UserError.
 - ☑ B5 **MED** (3fb91e4, 708e68b) — spans on remove_package, set_metadata, saves::swap/remove_sets, reconcile; launch carries exe; slot swap carries slot+rev.
-- ☐ B6 **MED** — saves.rs:200-239 — `sweep_into` uses `fs::rename`; EXDEV
+- ☑ B6 **MED** (f313fea) — saves.rs:200-239 — `sweep_into` uses `fs::rename`; EXDEV
   on relocated-Documents multi-volume setups; fall back to copy on
   `CrossesDevices`.
-- ☐ B7 **MED** — store.rs:137 — "orphans reclaimed by GC" claim is false
+- ☑ B7 **MED** (91b064b) — store.rs:137 — "orphans reclaimed by GC" claim is false
   (only GC lives inside remove_package); extract `Store::gc()` or fix the
   comment.
-- ☐ B8 **MED** — normalize.rs:203-207 — directory maps flatten to
-  `slot/<basename>` while packed maps keep their subfolder: same package
-  packed vs unpacked yields different canonical manifests. Preserve the
-  wrapper-relative path for map containers, or document the asymmetry.
-- ☐ B9 LOW — consolidate slot-owned sibling list (slots.rs:388,
+- ☑ B8 **MED** (a288324) — asymmetry documented as accepted: both forms
+  are field-proven (game-mirror acceptance for dir maps, Swarm Reborn for
+  packed); changing either rule risks working deployments.
+- ☑ B9 LOW (b403cfd) — consolidated slot-owned sibling list (slots.rs:388,
   launch.rs:136, library.rs:101) into one const in layout.rs; drop the dead
   `swarm\\evolution` entry.
-- ☐ B10 LOW — store.rs:219 — "Load a stored manifest" doc line sits on
+- ☑ B10 LOW (b403cfd) — doc on its method — "Load a stored manifest" doc line sits on
   `set_metadata`; move it to `load_manifest`.
 - ☐ B11 LOW — layout.rs:44-59 — `GameLayout` trait single-impl and
   `slot_dirs` dead; delete unless a second layout is imminent.
-- ☐ B12 LOW — import.rs:132 — `slug("")` yields an empty package id when
+- ☑ B12 LOW (b403cfd) — empty values are None:132 — `slug("")` yields an empty package id when
   `metadata.txt` has `title=`; treat empty values as None.
-- ☐ B13 LOW — copy_with_retry retries are silent (`tracing::warn!` per
+- ☑ B13 LOW (05c4850) — retries and reclaim notes logged retries are silent (`tracing::warn!` per
   attempt); slots.rs:84 discards reclaim_leftovers notes.
 - ☐ B14 LOW — error taxonomy drift: ledger errors and "ingest cancelled"
   flow through `pkg_err`; use UserError/Environment respectively.
@@ -99,18 +98,18 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
   `imported_at`), collapses the three duplicated blocks.
 - ☑ C3 **MED** (603863d) — campaigns cache now serves reads; mutations invalidate.
 - ☑ C4 **MED** (b4644cb) — set_enabled early-returns on unchanged state; no leaked clients.
-- ☐ C5 **MED** — error-path `log_op` missing on launch_package,
+- ☑ C5 **MED** (852bcc9) — fail() helper, all 7 commands `log_op` missing on launch_package,
   launch_game, launch_battlenet, remove_package, edit_package_metadata,
   migrate_candidate, save_config — failures invisible in support log AND
   Sentry (capture rides on log_op). Fix: a small `fail()` helper.
-- ☐ C6 **MED** — commands.rs:283 — `op_id` joined into a filesystem path
+- ☑ C6 **MED** (ff44708) — charset-validated at the boundary — `op_id` joined into a filesystem path
   unvalidated (webview-supplied, csp null). Validate charset
   (ascii-alphanumeric + dash) before use.
 - ☐ C7 LOW — import_ops never pruned; clear_all_data leaves stale map
   entries pointing at deleted scratch dirs.
 - ☐ C8 LOW — tracing spans on only 4 of 27 commands; add `#[tracing::
   instrument(skip_all)]` to remaining mutating/IO commands.
-- ☐ C9 LOW — updater: check() errors unlogged (comment claims otherwise);
+- ☑ C9 LOW (05c4850) — check errors logged check() errors unlogged (comment claims otherwise);
   success message says "restarting" but the restart comes from NSIS itself.
 - ☐ C10 LOW — split commands.rs along its section seams: state.rs
   (AppState/caches/invalidate), logging.rs (log_op/rotation/levels); fold
@@ -122,21 +121,21 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 
 ### D. UI
 
-- ☐ D1 **MED** — Settings.tsx:266-273 — after clear_all_data, stale
+- ☑ D1 **MED** (754d287) — Settings.tsx:266-273 — after clear_all_data, stale
   logLevel/saveIsolation/savesProfile are re-persisted by the debounced
   auto-save: "Clear all data" resurrects wiped settings. Set all six
   fields from the refetched config.
-- ☐ D2 **MED** — Library.tsx — a successful refresh never clears `error`
+- ☑ D2 **MED** (bdd21d9) — Library.tsx — a successful refresh never clears `error`
   and the Alert has no close button: one transient failure pins a permanent
   red banner. Clear error in `.then`.
 - ☐ D3 **MED** — Library.tsx:399-410 — sortable headers are click-only divs
   (no keyboard, no aria-sort). Use UnstyledButton inside the th + aria-sort.
 - ☐ D4 **MED** — Campaigns.tsx:283-297 — pick-modal rows are clickable
   Group divs without role/tabIndex/keydown; UnstyledButton per row.
-- ☐ D5 **MED** — ImportWizard.tsx — on ingest failure the wizard stays on
+- ☑ D5 **MED** (bdd21d9) — ImportWizard.tsx — on ingest failure the wizard stays on
   step 3 with a no-op Cancel; `setStep(2)` in the catch.
-- ☐ D6 LOW — dead `analyzeRef` (ImportWizard.tsx:72,135); delete.
-- ☐ D7 LOW — Library faction Select hardcodes the four entries that
+- ☑ D6 LOW (4d1a58c) — deleted `analyzeRef` (ImportWizard.tsx:72,135); delete.
+- ☑ D7 LOW (4d1a58c) — data={SLOTS} Select hardcodes the four entries that
   factions.ts exports as `SLOTS`; use `data={SLOTS}`.
 - ☐ D8 LOW — ConfigDto and LibraryEntry interfaces duplicated across
   components (ConfigDto already drifted 3 vs 6 fields); consolidate in
@@ -145,12 +144,12 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
   future catches on CommandError commands would render "[object Object]".
 - ☐ D10 LOW — activate flow copy-pasted three times (Library, Campaigns,
   ImportWizard); extract a `useActivate()` hook.
-- ☐ D11 LOW — Log.tsx refresh has no `.catch`; add one.
+- ☑ D11 LOW (4d1a58c) — catch + inline error refresh has no `.catch`; add one.
 - ☐ D12 LOW — Campaigns inline `<style>` injects a global rule per mount;
   move to stylesheet.
 - ☐ D13 LOW — keepMounted={false} resets Library search/sort on tab
   switch; acceptable if intentional, revisit.
-- ☐ D14 LOW — MigrationBanner: sanitized migration id can be empty; guard
+- ☑ D14 LOW (4d1a58c) — guarded: sanitized migration id can be empty; guard
   `!id` too.
 
 ### E. Docs
