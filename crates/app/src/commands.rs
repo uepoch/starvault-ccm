@@ -616,6 +616,15 @@ fn list_campaigns_inner(
     app: &AppHandle,
     store_state: &tauri::State<'_, AppState>,
 ) -> Result<Vec<CampaignSlot>, String> {
+    // Cache hit: mutations invalidate, so this matches the store.
+    if let Some(slots) = store_state
+        .campaigns_cache
+        .lock()
+        .expect("campaigns cache poisoned")
+        .as_ref()
+    {
+        return Ok(slots.clone());
+    }
     let started = std::time::Instant::now();
     let store = store_state.store()?;
     let t_ledger = std::time::Instant::now();
