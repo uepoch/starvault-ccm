@@ -1,99 +1,126 @@
 # Architecture
 
-StarVault CCM is a Tauri 2 desktop application with a pure-Rust domain core.
-The core is the product; the shell is its mouthpiece.
+StarVault CCM is a Tauri desktop application with a Tauri-independent Rust
+core. The central invariant is simple: the game has zero or one active custom
+campaign.
 
-## Workspace layout
+## Layers
 
+`crates/core` owns package identity, manifests, the content store, save
+transitions, game-file deployment, preflight, operation journaling, and startup
+recovery. It accepts paths and typed inputs. It does not import Tauri.
+
+`crates/app` owns process state and IPC adapters. It validates each request,
+resolves opaque IDs against current discovery, acquires the mutation mutex,
+calls one core workflow, logs full errors locally, and returns a stable result
+to the webview.
+
+`crates/app/ui` owns presentation and frontend state transitions. It does not
+sequence filesystem work or infer deployment state from cached package rows.
+
+`core::layout` is the only module that knows StarCraft II paths. Other modules
+receive paths from layout APIs.
+
+## Process state
+
+`AppState` holds one process-wide mutation mutex. These operations acquire it:
+
+- activate and Play;
+- restore and repair;
+- import commit and package removal;
+- configuration changes that affect saves or deployment;
+- clear-all.
+
+The lock covers preflight, any needed activation, and process launch during
+Play. It prevents a second command from observing or changing an intermediate
+state.
+
+## Core workflow
+
+The application workflow module exposes:
+
+```text
+activate(package_id)
+restore_vanilla()
+repair_active()
+preflight(package_id | current)
+initialize() / recover_pending()
 ```
-crates/
-  core/            pure Rust, zero Tauri deps, builds and tests on Linux
-    src/
-      layout/      GameLayout trait + WindowsLayout impl.
-                   ALL knowledge of the SC2 directory contract lives here.
-      config/      TOML config under %APPDATA%\StarVault\CCM\
-      mpq/         MPQ archive reader (read-only in v1)
-      package/     container discovery, DocumentHeader/DocumentInfo parsing,
-                   legacy metadata.txt parser, campaign.toml model, normalizer
-      store/       content-addressed blob store + SQLite ledger
-      library/     installed-package scan, statuses, old-CCM migration
-      slots/       SlotManager + SlotTransaction state machine
-      launch/      pre-flight verification + game process spawn
-      report/      report_error() seam (no-op backend until release)
-  app/             Tauri shell: commands, events, tray, updater wiring (M2)
-webui/             React + Vite + TypeScript + Mantine frontend (M2)
+
+Activation verifies the target manifest and current game state before it
+writes the operation journal. It stages all target content before swapping
+saves, campaign files, or Mods. The ledger commit occurs only after those
+swaps succeed. Final verification occurs before backups and the journal are
+removed.
+
+Startup recovery reads the journal and the ledger before accepting mutations.
+If the ledger still names `previous_campaign`, the filesystem rolls back. If
+it names `target_campaign`, the target is verified and cleanup is finalized,
+even when the last journal checkpoint predates the SQLite commit. If neither
+state can be proven, startup reports `recovery_required` and preserves every
+remaining backup and staging path. Journal-bound proofs cover the exact save
+transition, archived save sets, and previous and target campaign-slot objects;
+recovery rejects unknown edits or substituted files instead of inferring
+ownership from path names.
+
+## State and responses
+
+The core state model is:
+
+```text
+active_campaign = none | { package_id, revision, faction }
+live_save_owner = plain | package(package_id)
 ```
 
-## Structural rules
+The main frontend responses are:
 
-1. **The core never imports `tauri`.** Every crate in `core/` compiles and is
-   unit-tested on Linux against temporary directory trees. The shell calls the
-   core; the core never knows the shell exists.
-2. **One module owns path knowledge.** All game-directory paths are produced by
-   `layout::GameLayout`. No other module concatenates game path strings. This
-   is what keeps macOS a porting task instead of a rewrite.
-3. **Paths enter as parameters.** Functions take `&Path` / `PathBuf`; nothing
-   reconstructs absolute paths from string fragments (the original tool's
-   `path.Replace` bug class is structurally impossible here).
-4. **Typed error taxonomy.** See below. The UI maps variants to human
-   sentences; only `Internal` reaches crash reporting.
-5. **Async at the edges.** Long operations (import, switch) run on background
-   threads inside the shell and emit progress events; core functions are
-   synchronous and cancellation-aware where meaningful.
+```text
+ActiveCampaign { id, revision, faction }
 
-## Error taxonomy
+LibrarySnapshot {
+  entries,
+  active_campaign,
+  health
+}
 
-```rust
-pub enum Error {
-    User(UserError),            // locked files, disk full, user picked wrong exe
-    Package(PackageError),      // malformed zip, unreadable container,
-                                // unresolved dependency, schema violation
-    Environment(EnvironmentError), // no game install, non-Windows target,
-                                   // non-NTFS volume when junctions required
-    Internal(InternalError),    // bugs. reported via report_error(), never
-                                // blamed on the user
+Health {
+  state: ready | drifted | recovery_required,
+  issues
 }
 ```
 
-Every `PackageError` carries the offending container path so import failures
-point at the exact file inside the zip.
+`initialize()` returns a `StartupReport` after recovery. Campaign commands are
+`list_library`, `activate_package`, `play_package`, `restore_vanilla`, and
+`repair_active`. There is no separate Campaigns command set and no standalone
+game-launch command.
 
-## Data flow
+## Errors and diagnostics
 
-```
-zip file ──▶ package::normalize ──▶ interactive confirm (UI)
-                                        │
-                                        ▼
-                              store::ingest
-                     (blobs + manifest + ledger tx)
-                                        │
-              ┌─────────────────────────┤
-              ▼                         ▼
-      slots::activate              library::scan
-   (stage→verify→commit)          (reads store + slots)
-              │
-              ▼
-   game dir: Maps\Campaign\<slot>  +  Mods\ mirror
-              │
-              ▼
-        launch::preflight ──▶ StarCraft II.exe
+Core errors use four categories: `User`, `Package`, `Environment`, and
+`Internal`. Tauri maps them to:
+
+```text
+CommandError {
+  kind,
+  code,
+  message,
+  path,
+  retryable,
+  report_id
+}
 ```
 
-## Concurrency and state ownership
+The frontend never receives a raw Rust error chain. The local operation log
+keeps the chain and full paths. Telemetry receives only panics and explicit
+`Internal` errors after opt-in, with safe operation and error-code tags.
 
-- The SQLite ledger is the single writer for deployment state. All mutations go
-  through `store::Ledger::transaction()`; the filesystem is only ever mutated
-  inside a ledger transaction that can be rolled back.
-- Active-slot state is *derived* (which package revision each slot points at)
-  but cached in the ledger for fast UI reads; startup reconciliation compares
-  cache against reality and repairs or reports drift.
+## Test boundaries
 
-## Testing strategy
+Core integration tests use temporary store, game, and profile trees. Test-only
+failpoints stop activation after every journal phase. Restart tests must prove
+the recovered tree matches either the complete previous state or the complete
+committed target.
 
-- Core: unit tests per module plus integration tests that drive full flows
-  against temp trees. Golden fixtures: real-world packages (`example.zip`,
-  `example-fixed.zip`) reduced to committed test vectors.
-- Junction-specific behavior: gated to the Windows CI job (`windows-latest`);
-  everything else runs on Linux.
-- Shell: thin command wrappers, covered by a smoke test that boots the app
-  headless in CI where feasible.
+Windows tests cover junctions, directory links, locked files, sharing
+violations, and cross-volume save moves. The frontend tests presentation and
+its reducers with mocked typed adapters.

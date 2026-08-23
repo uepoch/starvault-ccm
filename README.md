@@ -1,105 +1,121 @@
 # StarVault CCM
 
-**Install, switch, and launch StarCraft II custom campaigns — without breaking
-your install.**
+StarVault CCM installs, switches, and launches StarCraft II custom campaigns.
+It is the successor to SC2CCM and is currently an alpha for Windows 10 or
+newer.
 
-StarVault CCM is a modern successor to the SC2 Custom Campaign Manager
-(SC2CCM). It keeps a local library of campaign packages, deploys them into the
-game's campaign slots as reversible transactions, resolves `.SC2Mod`
-dependencies without file soup in `Mods\`, isolates saves per campaign, and
-launches the game with one click.
+[Download the latest alpha](https://github.com/uepoch/starvault-ccm/releases/latest)
 
-[**Download the alpha**](https://github.com/uepoch/starvault-ccm/releases/latest)
-· Windows 10 or newer.
+## How campaign switching works
 
-## Why another campaign manager?
+StarVault keeps zero or one custom campaign active for the whole game. The
+Library is the only campaign-management screen.
 
-The original SC2CCM copied files around and hoped for the best. StarVault CCM
-treats a campaign switch as a transaction:
+- **Activate** deploys a package but does not launch the game.
+- **Play** runs preflight, activates the package if needed, then launches the
+  game.
+- **Return to vanilla** restores the game before another active package can be
+  replaced or removed.
 
-- **Nothing is overwritten.** Packages live in a content-addressed store;
-  activating a campaign stages, verifies, then swaps. A failed switch rolls
-  back; a crash mid-switch is repaired on next launch.
-- **Dependencies stay clean.** Shared `.SC2Mod` files are deduplicated across
-  campaigns. Two campaigns shipping different bytes for the same `Mods\` path
-  block activation with a dialog that names both — instead of one silently
-  winning and the other corrupting.
-- **Saves don't bleed.** Every campaign gets its own save set (banks
-  included); switching a faction swaps its saves in and out. Your vanilla
-  progress is never touched.
-- **One click to play.** Play resets every faction to plain, activates the
-  chosen campaign, and launches the game through Battle.net — signed in, no
-  clicks.
+Every package ID has one current manifest and one current revision. Reimporting
+an inactive package replaces that manifest atomically. Metadata edits do not
+change the revision. Reimporting or removing the active package is rejected
+until the user returns to vanilla.
 
-## Features
+Activation, restore, and repair use a persistent operation journal. StarVault
+writes the journal before each filesystem swap and keeps staging trees and
+backups until the ledger commits and verification succeeds. On startup it
+rolls an uncommitted operation back to the previous campaign; a ledger-committed
+operation is verified and finalized. If it cannot prove either state, it
+preserves the recovery files and blocks further mutations.
 
-![Library](docs/screenshots/library.png)
+StarVault also tracks files it manages in `Mods\`. A matching external file is
+borrowed and left in place on restore. A file created by StarVault is removed
+only while its hash still matches. Changed managed files stop the operation and
+remain available for Repair.
 
-The library lists every imported campaign with search, faction filter, and
-sortable columns.
+## Import and migration
 
-![Campaign select](docs/screenshots/campaign-select.png)
+The importer accepts community zip layouts with packed or loose `.SC2Map` and
+`.SC2Mod` containers. It shows detected metadata and faction before ingestion,
+enforces archive size and entry limits, and supports cancellation during large
+files.
 
-Faction cards mirror the in-game campaign menu.
+Old SC2CCM campaigns can be imported through the same checked pipeline. The
+desktop backend issues opaque migration candidate IDs. The frontend never
+sends a source filesystem path back to the migration command.
 
-- Import any community campaign zip — file dialog or drag-and-drop. Detected
-  title, author, version, and faction are confirmed before anything lands;
-  all fields are editable, and metadata stays editable later.
-- Library with search, faction filter, and sortable columns.
-- Faction cards mirroring the in-game campaign menu (WoL, HotS, LotV, NCO),
-  with per-faction activate/replace/restore.
-- Pre-flight check before launch: install validity, running instances,
-  leftover content — with one-click repair.
-- Migration from an existing SC2CCM install: old campaigns import through the
-  same checked pipeline, originals untouched.
-- Operation log with severity filter (the support artifact), and opt-in crash
-  reporting that carries the operation in flight — never personal data.
-- Automatic, silent updates: the app refreshes itself in the background and
-  restarts when a new release ships.
+## Save isolation
 
-## Alpha status
+Save isolation is an opt-in Beta feature and is off by default. Enabling it
+first creates a timestamped recovery backup of the selected profile's `Saves`
+and `Banks` directories. Profile selection, isolation changes, and deployment
+strategy changes stay locked while a custom campaign is active.
 
-This is an alpha: the core flows are tested (on real installs, not just CI),
-but the variety of community campaign packages out there will surface edge
-cases we haven't met. If an import fails or a campaign misbehaves, please
-[open an issue](https://github.com/uepoch/starvault-ccm/issues) with the
-operation log (Settings → Log) — that file usually contains the answer.
+The active package owns `Saves\Campaign`, `Saves\Unsaved`, and non-vanilla
+banks. Saves belonging to other vanilla factions stay in the profile root.
+OneDrive-managed profiles remain unsupported until their file semantics can be
+made safe.
 
-Known limitations:
+## Safety and privacy
 
-- **Battle.net must be installed** (and signed in) for the one-click launch.
-  Direct `StarCraft II.exe` launching does not support authenticated
-  campaign play — this is a game constraint, not a StarVault one.
-- **Resuming straight into a save** is not possible: the game's save tokens
-  are private to the game process. StarVault launches the campaign; picking
-  the save is the one click you keep.
-- **Drag-and-drop needs the app to run non-elevated** (a Windows UI rule).
-  The file dialog works either way.
+- StarVault refuses filesystem mutations while StarCraft II is running.
+- A process-wide mutation lock serializes activation, play, restore, repair,
+  import commit, removal, save-related configuration, and clear-all.
+- Clear-all restores and verifies vanilla before it closes the store or
+  removes application data.
+- Telemetry is strictly opt-in. Only panics and internal errors are sent.
+  User, package, and environment failures stay local. Reports exclude absolute
+  paths, usernames, profile IDs, archive names, and temporary paths.
+- Full diagnostic chains stay in the local operation log.
 
-## Support
+## Alpha reset
 
-- [Issue tracker](https://github.com/uepoch/starvault-ccm/issues) for bugs
-  and broken imports.
-- [Discord](https://discord.com/users/440833687257481227) — come talk.
+The hardened store deliberately does not migrate the previous alpha schema.
+Follow the [fresh alpha reset procedure](docs/alpha-reset.md) before installing
+the first build that uses the single-campaign schema. Stop if restore or backup
+verification fails.
+
+## Current limitations
+
+- Battle.net must be installed and signed in for authenticated campaign play.
+- Drag and drop requires the app to run non-elevated. The file picker works in
+  either mode.
+- Resuming directly into a selected save is not part of the launch contract.
+
+Report broken imports or recovery failures in the
+[issue tracker](https://github.com/uepoch/starvault-ccm/issues). Include the
+local operation log, but review it before posting because it contains full
+local paths.
 
 ## Development
 
-Rust workspace (`crates/core` domain, `crates/app` Tauri 2 shell) with a
-React + Mantine UI. The design documents and decision record live in
-[`docs/`](docs/).
+The Cargo workspace contains `crates/core`, the Tauri-independent domain, and
+`crates/app`, the desktop shell. The React frontend lives in `crates/app/ui`.
+Design documents live under [`docs/design`](docs/design).
+
+Install `cargo-audit` and Vite+ before running the complete local gate:
 
 ```sh
-cargo test -p svccm-core          # domain tests
-cargo clippy -p svccm-core --all-targets -- -D warnings
+cargo install cargo-audit --locked --version 0.22.2
+scripts/check.sh
 ```
 
-## Naming policy
+`scripts/check.sh` runs Rust formatting, clippy, core and desktop-adapter tests, Rust dependency
+audit, frontend formatting and type checks, frontend tests, the production
+JavaScript dependency audit, and the production web build.
 
-The official releases of StarVault CCM are the ones published from this
-repository. Modified or renamed builds must state clearly that they are
-unofficial. This project is not affiliated with or endorsed by Blizzard
-Entertainment; "StarCraft II" is used descriptively only.
+The release helper also runs the full gate and verifies that the requested
+version matches the Cargo workspace and `tauri.conf.json` before it dispatches
+the signing workflow. See the
+[release process](docs/design/release-process.md) for the signing order and the
+one documented RustSec exception.
 
-## License
+## Naming and license
 
-MIT — see [LICENSE](LICENSE).
+Official releases are published from this repository. Modified or renamed
+builds must identify themselves as unofficial. This project is not affiliated
+with or endorsed by Blizzard Entertainment. "StarCraft II" is used only to
+identify the supported game.
+
+Licensed under the [MIT License](LICENSE).

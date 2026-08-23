@@ -1,6 +1,6 @@
 [package]
 name = "svccm-core"
-description = "StarVault CCM domain core: packages, dependency store, slots, launch"
+description = "StarVault CCM domain core: packages, saves, deployment, recovery, and launch"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -24,3 +24,6 @@ tempfile = "3"
 [target."cfg(windows)".dependencies]
 junction = "2.0.0"
 winreg = "0.56.0"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2"

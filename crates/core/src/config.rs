@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{pkg_err, Result};
+use crate::identity::ProfileId;
 
 /// User settings persisted across runs. Defaults are sensible; every field
 /// is overridable in Settings.
@@ -24,8 +25,8 @@ pub struct Config {
     pub log_level: String,
     /// Experimental: isolate campaign saves per active package.
     pub save_isolation: bool,
-    /// Persisted saves profile `<account>/<profile>` when isolation is on.
-    pub saves_profile: Option<String>,
+    /// Opaque discovered profile token when isolation is on.
+    pub saves_profile: Option<ProfileId>,
 }
 
 impl Default for Config {
@@ -51,10 +52,22 @@ impl Config {
     /// Load a config; a missing file yields the default (first run).
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(pkg_err(path.display().to_string(), error.to_string())),
+        };
+        if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+            return Err(pkg_err(
+                path.display().to_string(),
+                "configuration path must be a regular file",
+            ));
+        }
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(e) => return Err(pkg_err(path.display().to_string(), e.to_string())),
+            Err(error) => return Err(pkg_err(path.display().to_string(), error.to_string())),
         };
         toml::from_str(&text)
             .map_err(|e| pkg_err(path.display().to_string(), format!("parse: {e}")))
@@ -63,14 +76,23 @@ impl Config {
     /// Persist the config, creating parent directories.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
         let text = toml::to_string_pretty(self)
             .map_err(|e| pkg_err(path.display().to_string(), e.to_string()))?;
-        std::fs::write(path, text)?;
-        Ok(())
+        crate::atomic_file::write(path, text.as_bytes())
     }
+}
+
+#[cfg(windows)]
+fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 #[cfg(test)]
@@ -101,5 +123,42 @@ mod tests {
         std::fs::write(&path, "future_field = 42\n").unwrap();
         // Unknown top-level keys are ignored; missing ones fall back to defaults.
         assert_eq!(Config::load(&path).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn atomic_save_replaces_the_existing_file_without_temporary_debris() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "log_level = \"warn\"\n").unwrap();
+
+        Config {
+            log_level: "error".into(),
+            ..Config::default()
+        }
+        .save(&path)
+        .unwrap();
+
+        assert_eq!(Config::load(&path).unwrap().log_level, "error");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_config_is_rejected_without_changing_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let external = dir.path().join("external.toml");
+        let linked = dir.path().join("config.toml");
+        std::fs::write(&external, "log_level = \"warn\"\n").unwrap();
+        symlink(&external, &linked).unwrap();
+
+        assert!(Config::load(&linked).is_err());
+        Config::default().save(&linked).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&external).unwrap(),
+            "log_level = \"warn\"\n"
+        );
+        assert!(!linked.symlink_metadata().unwrap().file_type().is_symlink());
     }
 }

@@ -1,11 +1,9 @@
-import { errMessage } from "./errors";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
-import type { ConfigDto, SavesStatus } from "./types";
 import {
+  Alert,
   Anchor,
   Button,
   Card,
@@ -19,11 +17,21 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import { errMessage } from "./errors";
+import {
+  clearAllData,
+  discoverGameExe,
+  getConfig,
+  getSavesStatus,
+  listLibrary,
+  saveConfig,
+} from "./ipc";
+import type { LibrarySnapshot, SavesStatus } from "./types";
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
 export default function Settings() {
-  const [gameExe, setGameExe] = useState<string>("");
+  const [gameExe, setGameExe] = useState("");
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
   const [logLevel, setLogLevel] = useState("info");
@@ -32,57 +40,97 @@ export default function Settings() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [appVersion, setAppVersion] = useState("");
   const [savesStatus, setSavesStatus] = useState<SavesStatus | null>(null);
+  const [library, setLibrary] = useState<LibrarySnapshot | null>(null);
   const [status, setStatus] = useState<SaveStatus>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Skip the auto-save effect until the initial load has populated state.
   const loadedRef = useRef(false);
+  const skipNextSaveRef = useRef(false);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const activeSavesRef = useRef<Set<Promise<void>>>(new Set());
+
+  const loadSettings = useCallback(async () => {
+    loadedRef.current = false;
+    try {
+      const [config, saves, librarySnapshot] = await Promise.all([
+        getConfig(),
+        getSavesStatus(),
+        listLibrary(),
+      ]);
+      skipNextSaveRef.current = true;
+      setGameExe(config.game_exe ?? "");
+      setStrategy(config.strategy_override ?? "auto");
+      setCrashReports(config.crash_reports_opt_in);
+      setLogLevel(config.log_level ?? "info");
+      setSaveIsolation(config.save_isolation);
+      setSavesProfile(config.saves_profile);
+      setSavesStatus(saves);
+      setLibrary(librarySnapshot);
+      setStatus("idle");
+      setErrorMsg(null);
+      loadedRef.current = true;
+    } catch (error) {
+      notifications.show({ color: "red", title: "Load failed", message: errMessage(error) });
+    }
+  }, []);
 
   useEffect(() => {
     getVersion()
       .then(setAppVersion)
       .catch(() => setAppVersion(""));
-    invoke<SavesStatus>("get_saves_status")
-      .then(setSavesStatus)
-      .catch(() => {});
-    invoke<ConfigDto>("get_config")
-      .then((cfg) => {
-        setGameExe(cfg.game_exe ?? "");
-        setStrategy(cfg.strategy_override ?? "auto");
-        setCrashReports(cfg.crash_reports_opt_in);
-        setLogLevel(cfg.log_level ?? "info");
-        setSaveIsolation(cfg.save_isolation);
-        setSavesProfile(cfg.saves_profile);
-        loadedRef.current = true;
-      })
-      .catch((e) =>
-        notifications.show({ color: "red", title: "Load failed", message: errMessage(e) }),
-      );
-  }, []);
+    void loadSettings();
+  }, [loadSettings]);
 
-  // Auto-save: debounced so typing a path doesn't fire per keystroke.
   useEffect(() => {
     if (!loadedRef.current) return;
-    const t = setTimeout(async () => {
-      setStatus("saving");
-      try {
-        await invoke("save_config", {
-          gameExe: gameExe === "" ? null : gameExe,
-          strategyOverride: strategy === "auto" ? null : strategy,
-          crashReportsOptIn: crashReports,
-          logLevel,
-          extras: { saveIsolation, savesProfile },
-        });
-        setStatus("saved");
-        setErrorMsg(null);
-      } catch (e) {
-        // Keep the typed value visible; the inline warning explains why it
-        // is not persisted yet. Config still holds the last valid state.
-        setStatus("error");
-        setErrorMsg(errMessage(e));
-      }
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      if (autosaveTimerRef.current === timeout) autosaveTimerRef.current = null;
+      const save = (async () => {
+        setStatus("saving");
+        try {
+          await saveConfig({
+            gameExe: gameExe === "" ? null : gameExe,
+            strategyOverride: strategy === "auto" ? null : strategy,
+            crashReportsOptIn: crashReports,
+            logLevel,
+            saveIsolation,
+            savesProfile,
+          });
+          setStatus("saved");
+          setErrorMsg(null);
+        } catch (error) {
+          setStatus("error");
+          setErrorMsg(errMessage(error));
+        }
+      })();
+      activeSavesRef.current.add(save);
+      void save.finally(() => activeSavesRef.current.delete(save));
     }, 700);
-    return () => clearTimeout(t);
+    autosaveTimerRef.current = timeout;
+    return () => {
+      if (autosaveTimerRef.current === timeout) {
+        window.clearTimeout(timeout);
+        autosaveTimerRef.current = null;
+      }
+    };
   }, [gameExe, strategy, crashReports, logLevel, saveIsolation, savesProfile]);
+
+  const quiesceAutosave = useCallback(async () => {
+    loadedRef.current = false;
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    await Promise.allSettled([...activeSavesRef.current]);
+  }, []);
+
+  const recoveryRequired = library?.health.state === "recovery_required";
+  const deploymentSettingsLocked =
+    library === null || library.active_campaign !== null || recoveryRequired;
+  const activeTitle = library?.active_campaign?.id ?? null;
 
   const browse = async () => {
     const selected = await open({
@@ -90,12 +138,25 @@ export default function Settings() {
       directory: false,
       filters: [{ name: "StarCraft II", extensions: ["exe"] }],
     });
-    if (selected) setGameExe(selected);
+    if (selected && !Array.isArray(selected)) setGameExe(selected);
   };
 
   return (
     <Stack p="lg" gap="lg" h="100%">
       <Title order={2}>Settings</Title>
+
+      {activeTitle && (
+        <Alert color="blue" title="Campaign settings are locked">
+          Return to vanilla before changing the game path, switch strategy, save isolation, or save
+          profile. {activeTitle} is currently active.
+        </Alert>
+      )}
+      {!activeTitle && recoveryRequired && (
+        <Alert color="red" title="Recovery is required">
+          Complete recovery from Library before changing the game path, switch strategy, save
+          isolation, or save profile.
+        </Alert>
+      )}
 
       <Grid>
         <Grid.Col span={6}>
@@ -105,27 +166,35 @@ export default function Settings() {
                 <Text fw={500}>General</Text>
                 <TextInput
                   label="StarCraft II.exe"
-                  placeholder="C:\Program Files (x86)\StarCraft II\StarCraft II.exe"
+                  placeholder="C:\\Program Files (x86)\\StarCraft II\\StarCraft II.exe"
                   value={gameExe}
-                  onChange={(e) => setGameExe(e.currentTarget.value)}
+                  disabled={deploymentSettingsLocked}
+                  onChange={(event) => setGameExe(event.currentTarget.value)}
                   error={status === "error" ? errorMsg : undefined}
                 />
                 <Group gap="xs">
-                  <Button variant="light" size="xs" onClick={browse}>
+                  <Button
+                    variant="light"
+                    size="xs"
+                    disabled={deploymentSettingsLocked}
+                    onClick={browse}
+                  >
                     Browse…
                   </Button>
                   <Button
                     variant="light"
                     size="xs"
+                    disabled={deploymentSettingsLocked}
                     onClick={async () => {
-                      const found = await invoke<string | null>("discover_game_exe");
+                      const found = await discoverGameExe();
                       if (found) {
                         setGameExe(found);
                         notifications.show({ color: "green", message: "Found StarCraft II." });
                       } else {
                         notifications.show({
                           color: "yellow",
-                          message: "Could not find an SC2 install automatically — browse for it.",
+                          message:
+                            "Could not find an SC2 install automatically. Browse for it instead.",
                         });
                       }
                     }}
@@ -146,9 +215,9 @@ export default function Settings() {
               </Stack>
               <Switch
                 label="Crash reports"
-                description="Opt-in. Sends crash data only; no analytics exist."
+                description="Opt-in. Sends internal failures only; no analytics exist."
                 checked={crashReports}
-                onChange={(e) => setCrashReports(e.currentTarget.checked)}
+                onChange={(event) => setCrashReports(event.currentTarget.checked)}
               />
             </Stack>
           </Card>
@@ -167,6 +236,7 @@ export default function Settings() {
                   { value: "copy", label: "Copy" },
                 ]}
                 value={strategy}
+                disabled={deploymentSettingsLocked}
                 onChange={setStrategy}
               />
               <Select
@@ -178,24 +248,38 @@ export default function Settings() {
                   { value: "error", label: "Errors only" },
                 ]}
                 value={logLevel}
-                onChange={(v) => setLogLevel(v ?? "info")}
+                onChange={(value) => setLogLevel(value ?? "info")}
               />
               <Switch
-                label="Save isolation (experimental)"
+                label="Save isolation (Beta)"
                 description={
-                  savesStatus?.reason ??
-                  "Each campaign keeps its own saves; switching never strands progress."
+                  activeTitle
+                    ? "Return to vanilla before changing save isolation."
+                    : recoveryRequired
+                      ? "Complete recovery from Library before changing save isolation."
+                      : (savesStatus?.reason ??
+                        "Each campaign keeps its own saves. Enabling it first creates a recovery backup.")
                 }
-                disabled={savesStatus ? !savesStatus.supported : true}
+                disabled={deploymentSettingsLocked || (savesStatus ? !savesStatus.supported : true)}
                 checked={saveIsolation}
-                onChange={(e) => setSaveIsolation(e.currentTarget.checked)}
+                onChange={(event) => {
+                  const enabled = event.currentTarget.checked;
+                  if (enabled && !savesProfile && savesStatus?.selected) {
+                    setSavesProfile(savesStatus.selected);
+                  }
+                  setSaveIsolation(enabled);
+                }}
               />
               {savesStatus && savesStatus.supported && savesStatus.profiles.length > 1 && (
                 <Select
                   label="Saves profile"
-                  description="Multiple Battle.net accounts found — pick which saves to isolate."
-                  data={savesStatus.profiles.map((p) => ({ value: p, label: p }))}
+                  description="Multiple Battle.net accounts were found. Choose which saves to isolate."
+                  data={savesStatus.profiles.map((profile) => ({
+                    value: profile.id,
+                    label: profile.label,
+                  }))}
                   value={savesProfile}
+                  disabled={deploymentSettingsLocked}
                   onChange={setSavesProfile}
                 />
               )}
@@ -208,8 +292,9 @@ export default function Settings() {
         <Stack gap="sm">
           <Text fw={500}>Danger zone</Text>
           <Text size="sm" c="dimmed">
-            Removes every imported package, the ledger, the log, and your settings. Your game
-            install is not touched. This cannot be undone.
+            Returns to vanilla, verifies the game files, then removes every imported package, the
+            ledger, the log, and your settings. If restoration cannot be verified, nothing is
+            deleted.
           </Text>
           <Button color="red" variant="light" w="fit-content" onClick={() => setConfirmClear(true)}>
             Clear all data…
@@ -240,8 +325,8 @@ export default function Settings() {
       >
         <Stack gap="sm">
           <Text size="sm">
-            Every imported package, the log, and your settings will be deleted. Slots currently
-            active in the game directory stay as they are until you restore them.
+            StarVault will first return to vanilla and verify the result. Only then will it delete
+            every imported package, the log, and your settings. This cannot be undone.
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setConfirmClear(false)}>
@@ -252,25 +337,15 @@ export default function Settings() {
               onClick={async () => {
                 setConfirmClear(false);
                 try {
-                  await invoke("clear_all_data");
-                  // Reload from the just-wiped config with the auto-save
-                  // disarmed, or the debounced save re-persists the stale
-                  // fields 700 ms later and resurrects them.
-                  loadedRef.current = false;
-                  const cfg = await invoke<ConfigDto>("get_config");
-                  setGameExe(cfg.game_exe ?? "");
-                  setStrategy(cfg.strategy_override ?? "auto");
-                  setCrashReports(cfg.crash_reports_opt_in);
-                  setLogLevel(cfg.log_level ?? "info");
-                  setSaveIsolation(cfg.save_isolation);
-                  setSavesProfile(cfg.saves_profile);
-                  loadedRef.current = true;
+                  await quiesceAutosave();
+                  await clearAllData();
+                  await loadSettings();
                   notifications.show({ color: "green", message: "All data cleared." });
-                } catch (e) {
+                } catch (error) {
                   notifications.show({
                     color: "red",
                     title: "Clear failed",
-                    message: errMessage(e),
+                    message: errMessage(error),
                   });
                   loadedRef.current = true;
                 }

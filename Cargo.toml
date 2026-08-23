@@ -10,6 +10,3 @@ authors = ["StarVault CCM contributors"]
 
 [workspace.dependencies]
 thiserror = "2"
-
-# M1 dependencies (added as modules land):
-# sha2, hex, rusqlite (bundled), serde, toml, walkdir, rayon

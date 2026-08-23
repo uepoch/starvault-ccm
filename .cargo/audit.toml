@@ -1,0 +1,7 @@
+[advisories]
+# `rsa` is pulled in by wow-mpq. StarVault only opens and reads archives; it
+# does not call wow-mpq's signature-generation API or perform private-key
+# operations. The weak Blizzard key embedded upstream is already public. The
+# timing-key-recovery advisory therefore has no secret key to expose here.
+# No fixed rsa 0.9 release exists. Remove this exception when wow-mpq updates.
+ignore = ["RUSTSEC-2023-0071"]

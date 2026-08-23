@@ -4437,9 +4437,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 name = "svccm-app"
 version = "0.1.7"
 dependencies = [
+ "junction",
  "rustls",
  "sentry",
- "sentry-tracing",
  "serde",
  "serde_json",
  "svccm-core",
@@ -4448,6 +4448,8 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4458,6 +4460,7 @@ version = "0.1.7"
 dependencies = [
  "hex",
  "junction",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

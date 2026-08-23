@@ -1,8 +1,6 @@
 name: release
 
 on:
-  # Runs on main so GitHub's branch-scoped action cache is shared between
-  # releases and CI; a tag-ref run would always start cold.
   workflow_dispatch:
     inputs:
       version:
@@ -12,28 +10,70 @@ on:
 permissions: {}
 
 jobs:
-  # Early gate: no build starts unless the tag has a changelog entry.
-  changelog-required:
+  metadata-gate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Check CHANGELOG.md has an entry for this tag
+      - name: Check requested version and changelog
         env:
           TAG_VERSION: ${{ inputs.version }}
         run: |
+          case "$TAG_VERSION" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "::error::Version must use vX.Y.Z format."
+              exit 1
+              ;;
+          esac
+          scripts/check-version.sh "$TAG_VERSION"
           version="${TAG_VERSION#v}"
-          if ! grep -q "## \[${version}\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## [${version}]' entry. Add it and re-tag."
+          if ! grep -Fq "## [$version]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$version]' entry."
             exit 1
           fi
 
-  build-windows:
-    needs: changelog-required
+  rust-gate:
+    needs: metadata-gate
     runs-on: windows-latest
-    permissions:
-      contents: write # create the tag, release, and upload artifacts
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          shared-key: svccm-release-gates
+          cache-on-failure: true
+      - run: cargo fmt --check --all
+      - run: cargo clippy -p svccm-core -p svccm-app --all-targets -- -D warnings
+      - run: cargo test -p svccm-core
+      - run: cargo test -p svccm-app
+
+  webui-gate:
+    needs: metadata-gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: crates/app/ui
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@07d0b0e993009eb3b908ea06e49e88e933b728a2
+        with:
+          cache: true
+      - run: vp install
+      - run: vp check
+      - run: pnpm test --run
+      - run: vp build
+
+  dependency-audits:
+    needs: metadata-gate
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -41,9 +81,35 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
-          shared-key: svccm-rel
+          shared-key: svccm-release-audit
           cache-on-failure: true
-      # Frontend: Vite+ toolchain, then build the embedded UI.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Audit Rust dependencies
+        run: cargo audit
+      - uses: voidzero-dev/setup-vp@07d0b0e993009eb3b908ea06e49e88e933b728a2
+        with:
+          cache: true
+      - run: vp install
+        working-directory: crates/app/ui
+      - name: Audit production JavaScript dependencies
+        run: pnpm audit --prod --audit-level high
+        working-directory: crates/app/ui
+
+  build-windows:
+    needs: [rust-gate, webui-gate, dependency-audits]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          shared-key: svccm-release-build
+          cache-on-failure: true
       - uses: voidzero-dev/setup-vp@07d0b0e993009eb3b908ea06e49e88e933b728a2
         with:
           cache: true
@@ -51,32 +117,28 @@ jobs:
         working-directory: crates/app/ui
       - run: vp build
         working-directory: crates/app/ui
-      # NSIS installer + signed updater bundle via the Tauri CLI.
-      - run: ui/node_modules/.bin/tauri build
+      - name: Build and sign the Windows installer
+        run: ui/node_modules/.bin/tauri build
         working-directory: crates/app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      # latest.json manifest for the auto-updater: names the NSIS installer,
-      # its detached signature, and the release notes.
       - name: Compose latest.json
         shell: pwsh
         working-directory: crates/app
         env:
           TAG: ${{ inputs.version }}
         run: |
-          # Cargo target lives at the WORKSPACE root, not under crates/app.
           $version = $env:TAG.TrimStart('v')
           $nsis = Get-ChildItem "../../target/release/bundle/nsis/*.exe" | Select-Object -First 1
-          $sig  = Get-ChildItem "../../target/release/bundle/nsis/*.exe.sig" | Select-Object -First 1
+          $sig = Get-ChildItem "../../target/release/bundle/nsis/*.exe.sig" | Select-Object -First 1
           if (-not $nsis -or -not $sig) { throw "NSIS installer or signature missing" }
           $sigContent = (Get-Content $sig.FullName -Raw).Trim()
-          # GitHub renames release assets on upload: spaces become dots.
-          $assetName = $nsis.Name -replace ' ', '.'
+          $assetName = [System.Uri]::EscapeDataString($nsis.Name)
           $manifest = @{
-            version  = $version
-            notes    = "See https://github.com/uepoch/starvault-ccm/releases/tag/$env:TAG"
+            version = $version
+            notes = "See https://github.com/uepoch/starvault-ccm/releases/tag/$env:TAG"
             pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
             platforms = @{
               "windows-x86_64" = @{
@@ -87,9 +149,11 @@ jobs:
           }
           $manifest | ConvertTo-Json -Depth 5 | Out-File -Encoding utf8NoBOM "../../target/release/bundle/latest.json"
 
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+      - name: Publish signed artifacts and updater manifest
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ inputs.version }}
+          fail_on_unmatched_files: true
           files: |
             target/release/bundle/nsis/*.exe
             target/release/bundle/nsis/*.exe.sig

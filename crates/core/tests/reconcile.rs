@@ -1,76 +1,125 @@
-//! Startup reconciliation: crash leftovers, dangling links.
+//! Rollback helpers used by startup journal recovery.
 
+use std::path::Path;
+
+use svccm_core::config::StrategyChoice;
+use svccm_core::identity::PackageId;
 use svccm_core::layout::{SlotId, WindowsLayout};
-use svccm_core::slots::SlotManager;
+use svccm_core::mods::{rollback_from_paths as rollback_mods, PreparedModsTransition};
+use svccm_core::package::normalize::plan_from_extracted;
+use svccm_core::slots::{rollback_paths_checked, SlotManager};
 use svccm_core::store::Store;
 
-fn setup() -> (tempfile::TempDir, WindowsLayout, Store) {
-    let tmp = tempfile::tempdir().unwrap();
-    let layout = WindowsLayout::new(tmp.path().join("sc2"));
-    std::fs::create_dir_all(layout.slot_dir(SlotId::LotV)).unwrap();
-    let store = Store::open(tmp.path().join("store")).unwrap();
-    (tmp, layout, store)
+fn make_source(root: &Path) {
+    let map = root.join("Maps/campaign/recovery.SC2Map");
+    std::fs::create_dir_all(&map).unwrap();
+    std::fs::write(map.join("payload"), b"map").unwrap();
+    std::fs::create_dir_all(root.join("Mods/Recovery.SC2Mod")).unwrap();
+    std::fs::write(root.join("Mods/Recovery.SC2Mod/payload"), b"mod").unwrap();
+}
+
+#[cfg(unix)]
+fn create_directory_link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).unwrap();
+}
+
+#[cfg(windows)]
+fn create_directory_link(target: &Path, link: &Path) {
+    junction::create(target, link).unwrap();
 }
 
 #[test]
-fn crash_backup_is_restored_when_slot_missing() {
-    let (_tmp, layout, store) = setup();
+fn slot_rollback_can_resume_from_journal_paths_and_manifest_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let layout = WindowsLayout::new(temp.path().join("sc2"));
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_source(&source);
+    let id = PackageId::parse("recovery").unwrap();
+    let plan = plan_from_extracted(&source).unwrap();
+    store.ingest(&id, SlotId::LotV, &plan).unwrap();
+    let manifest = store.load_manifest(&id).unwrap();
+    let manager = SlotManager::new(&layout, &store).with_strategy(Some(StrategyChoice::Copy));
+    let transition = manager
+        .prepare(None, Some(&manifest), "crashed-slot")
+        .unwrap();
+    let paths = transition.journal_paths();
+    transition.apply().unwrap();
+    assert!(layout
+        .slot_dir(SlotId::LotV)
+        .join("recovery.SC2Map/payload")
+        .is_file());
+    drop(transition);
 
-    // Simulate a crash mid-swap: slot dir renamed aside, nothing in place.
-    let slot_dir = layout.slot_dir(SlotId::LotV);
-    std::fs::remove_dir_all(&slot_dir).unwrap();
-    let backup = sibling_backup(&slot_dir);
-    std::fs::create_dir_all(&backup).unwrap();
-    std::fs::write(backup.join("payload.txt"), b"old").unwrap();
-    store.set_active_slot(SlotId::LotV, "pkg", "rev").unwrap();
+    rollback_paths_checked(&paths, None, Some(&manifest)).unwrap();
+    assert!(layout.slot_dir(SlotId::LotV).symlink_metadata().is_err());
+    assert!(paths
+        .iter()
+        .all(|paths| !paths.staging.exists() && !paths.backup.exists()));
+}
 
-    let manager = SlotManager::new(&layout, &store);
-    let report = manager.reconcile().unwrap();
-    assert!(report.iter().any(|r| r.contains("restored")), "{report:?}");
-    assert!(slot_dir.join("payload.txt").exists());
+#[cfg(any(unix, windows))]
+#[test]
+fn wol_rollback_rejects_a_linked_backup_before_external_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let layout = WindowsLayout::new(temp.path().join("sc2"));
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_source(&source);
+    let id = PackageId::parse("recovery").unwrap();
+    let plan = plan_from_extracted(&source).unwrap();
+    store.ingest(&id, SlotId::Wol, &plan).unwrap();
+    let manifest = store.load_manifest(&id).unwrap();
+    let manager = SlotManager::new(&layout, &store).with_strategy(Some(StrategyChoice::Copy));
+    let transition = manager
+        .prepare(None, Some(&manifest), "linked-wol-backup")
+        .unwrap();
+    let paths = transition.journal_paths();
+    transition.apply().unwrap();
+
+    std::fs::remove_dir_all(&paths[0].backup).unwrap();
+    let external = temp.path().join("external-backup");
+    let sentinel = external.join("sentinel.txt");
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(&sentinel, b"outside").unwrap();
+    create_directory_link(&external, &paths[0].backup);
+
+    let error = rollback_paths_checked(&paths, None, Some(&manifest)).unwrap_err();
+    assert_eq!(error.code(), "unsafe_slot_artifact");
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"outside");
+    assert!(layout
+        .slot_dir(SlotId::Wol)
+        .join("recovery.SC2Map/payload")
+        .is_file());
 }
 
 #[test]
-fn stale_backups_and_staging_are_reclaimed() {
-    let (_tmp, layout, store) = setup();
+fn mods_rollback_can_resume_from_only_journal_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let layout = WindowsLayout::new(temp.path().join("sc2"));
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_source(&source);
+    let id = PackageId::parse("recovery").unwrap();
+    let plan = plan_from_extracted(&source).unwrap();
+    store.ingest(&id, SlotId::LotV, &plan).unwrap();
+    let manifest = store.load_manifest(&id).unwrap();
+    let transition = PreparedModsTransition::prepare(
+        &store,
+        &layout.mods_dir(),
+        &[],
+        Some(&manifest),
+        "crashed-mods",
+    )
+    .unwrap();
+    let staging = transition.staging_path();
+    let backup = transition.backup_path();
+    transition.apply().unwrap();
+    assert!(layout.mods_dir().join("Recovery.SC2Mod/payload").is_file());
+    drop(transition);
 
-    let slot_dir = layout.slot_dir(SlotId::LotV); // exists: committed state wins
-    let backup = sibling_backup(&slot_dir);
-    std::fs::create_dir_all(&backup).unwrap();
-    let staging = slot_dir.with_file_name(format!("void.staging-{}", std::process::id()));
-    std::fs::create_dir_all(&staging).unwrap();
-
-    SlotManager::new(&layout, &store).reconcile().unwrap();
-    assert!(!backup.exists());
+    rollback_mods(&layout.mods_dir(), &backup, &staging).unwrap();
+    assert!(!layout.mods_dir().join("Recovery.SC2Mod").exists());
     assert!(!staging.exists());
-    assert!(slot_dir.exists());
-}
-
-#[cfg(unix)]
-#[test]
-fn dangling_link_is_removed_and_ledger_cleared() {
-    use std::os::unix::fs::symlink;
-    let (_tmp, layout, store) = setup();
-
-    let slot_dir = layout.slot_dir(SlotId::LotV);
-    std::fs::remove_dir_all(&slot_dir).unwrap();
-    symlink("/nowhere/nothing", &slot_dir).unwrap();
-    store.set_active_slot(SlotId::LotV, "pkg", "rev").unwrap();
-
-    let report = SlotManager::new(&layout, &store).reconcile().unwrap();
-    assert!(report.iter().any(|r| r.contains("dangling")), "{report:?}");
-    assert!(!symlink_or_link(&slot_dir));
-    assert!(store.active_slots().unwrap().is_empty());
-}
-
-#[cfg(unix)]
-fn symlink_or_link(path: &std::path::Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
-}
-
-fn sibling_backup(slot_dir: &std::path::Path) -> std::path::PathBuf {
-    let name = slot_dir.file_name().unwrap().to_string_lossy();
-    slot_dir.with_file_name(format!("{name}.backup-{}", std::process::id()))
+    assert!(!backup.exists());
 }

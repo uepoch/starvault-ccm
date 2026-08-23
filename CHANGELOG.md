@@ -2,25 +2,30 @@
 
 ## [0.1.7] — 2026-08-23
 
-- Fixed campaigns leaving their shared mod files in the game's `Mods\`
-  after a restore or replace: the deployed union now shrinks with the
-  active set.
-- Fixed vanilla campaign progress leaking into custom-campaign save
-  sets: fixed-name saves and banks always ride with the plain set, so a
-  campaign can never offer a Continue state it did not earn.
-- Migration from an old SC2CCM install works again (detection pointed at
-  the wrong folder and never fired).
-- Re-imported campaigns: the newest revision (by import time) is picked,
-  not a random one.
-- Large campaigns activate in seconds again — the deployment ledger is
-  written in one transaction instead of one per file.
-- Launch: no flat 6-second wait when the game was never running; a clear
-  error if it is still running instead of hanging.
-- "Clear all data" no longer resurrects wiped settings; a failed ingest
-  returns to the confirm step instead of a dead Cancel button.
-- Saves on a Documents folder located on another drive are handled.
-- Every command failure now lands in the operation log and crash reports
-  carry the operation in flight (package, slot, archive).
+- Campaign activation is now global: zero or one custom campaign can be active,
+  and Library is the only campaign-management screen. Activate, Play, and
+  Return to vanilla are separate actions.
+- Activation, restore, and repair now use a durable cross-resource journal.
+  Interrupted operations recover to the exact previous or committed state;
+  ambiguous recovery preserves its backups and blocks further mutations.
+- Packages now have one current manifest and content-derived revision.
+  Inactive reimports replace atomically; active packages must be returned to
+  vanilla before replacement or removal.
+- Managed `Mods\` files distinguish StarVault-created content from identical
+  borrowed files. Changed or external content is never silently deleted.
+- Save isolation is rebuilt around one global owner, remains opt-in Beta, and
+  creates a verified `Saves` and `Banks` recovery backup before enablement or
+  profile changes.
+- Import now enforces entry, path, per-file, total-size, and free-space limits,
+  supports mid-file cancellation, and cleans operation scratch data on every
+  terminal path.
+- Commands return stable structured errors. Opt-in telemetry sends only panics
+  and internal failures with redacted payloads and safe operation/error tags;
+  complete diagnostics remain local.
+- Clear-all first restores and verifies vanilla, refuses linked/junctioned
+  application data, cancels imports, then removes only owned data.
+- Release signing is gated on version consistency, formatting, clippy, Rust
+  and frontend tests, production builds, and Rust/JavaScript dependency audits.
 
 ## [0.1.6] — 2026-08-23
 

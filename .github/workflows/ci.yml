@@ -28,8 +28,9 @@ jobs:
           shared-key: svccm-ci
           cache-on-failure: true
       - run: cargo fmt --check --all
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy -p svccm-core -p svccm-app --all-targets -- -D warnings
+      - run: cargo test -p svccm-core
+      - run: cargo test -p svccm-app
       # Junction swap atomicity tests are cfg(windows) and activate here.
 
   webui:
@@ -46,4 +47,5 @@ jobs:
           cache: true
       - run: vp install
       - run: vp check
+      - run: pnpm test --run
       - run: vp build

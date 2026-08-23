@@ -9,7 +9,7 @@ Yes — **easy**. `SC2Switcher_x64.exe -run <path\to\save.SC2Save>` loads a save
 | Task | Verdict | Mechanism | Confidence |
 | --- | --- | --- | --- |
 | Inspect bank | **trivial** (but skip it) | `.SC2Bank` = plain XML (`<Bank><Key name=…>`); std/quick-xml parse. Not needed for Play-resume | high (format), n/a (need) |
-| Inspect save ("latest for this campaign/mission/time") | **trivial** (no parse at all) | glob `Saves\Campaign\*.SC2Save` + max mtime; filename = mission display name; campaign = our own slot ledger | high — **verified locally** |
+| Inspect save ("latest for this campaign/mission/time") | **trivial** (no parse at all) | glob `Saves\Campaign\*.SC2Save` + max mtime; filename = mission display name; campaign = the active-campaign ledger row | high — **verified locally** |
 | Deep-parse save (SaveInfo etc.) | **easy, optional** | wow-mpq 0.7.0 `Archive::open` (handles `MPQ\x1b` transparently) → `user_data()`, `list()`, `read_file()` | med — API verified on docs.rs; entry names unconfirmed |
 | Launch into save | **easy** | `SC2Switcher_x64.exe -run "<absolute save path>"` | med-high — engine-documented, untested here |
 | Launch into save, fallback | **easy** | shell association `Blizzard.SC2Save\shell\open\command` = `…SC2Switcher.exe "%1"` (positional; verified working for replays) | med |
@@ -33,7 +33,7 @@ Yes — **easy**. `SC2Switcher_x64.exe -run <path\to\save.SC2Save>` loads a save
 pick():  resolves Saves dir (existing discover: Documents → Accounts\<acct>\<profile>\Saves)
          newest = argmax(mtime) over Saves\Campaign\*.SC2Save   (+ Saves\Unsaved\* if we honor autosaves)
          label  = file_stem (mission name) + relative mtime      → "Resume: Liberation Day · 2 h ago"
-launch(): preflight (no running SC2 — existing check), junction swap already active (slot pinned)
+launch(): preflight (no running SC2), requested campaign already fully committed
          spawn: SC2Switcher_x64.exe  -run  "<absolute path to newest save>"
          [alt]  if -run save-mode fails on this build: spawn the Blizzard.SC2Save shell-open command,
                 i.e. SC2Switcher with the path as positional arg (replay-verified form)
@@ -102,6 +102,6 @@ to the game over private IPC at spawn time (registry shows only
 never touches disk in reusable form. Only `--exec` delegation — Battle.net
 pressing its own Play button — produces an authenticated external launch.
 
-Shipped behavior: Play = reset factions + activate campaign + delegate to
+Shipped behavior: Play = preflight + activate only if needed + delegate to
 Battle.net. The player is two clicks from resuming (lobby → Load Game);
 closing that gap requires Blizzard cooperation, not cleverness.

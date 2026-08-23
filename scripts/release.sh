@@ -14,6 +14,8 @@ if ! grep -q "## \[${tag#v}\]" CHANGELOG.md; then
   echo "Write the changelog entry first; releases without one are blocked." >&2
   exit 1
 fi
+scripts/check-version.sh "$tag"
+scripts/check.sh
 git push origin HEAD:main
 gh workflow run release.yml --ref main -f version="$tag"
-echo "Dispatched release $tag — watch it with 'gh run watch' or the Actions tab."
+echo "Dispatched release $tag. Watch it with 'gh run watch' or the Actions tab."

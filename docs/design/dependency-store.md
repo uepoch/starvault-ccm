@@ -1,120 +1,93 @@
 # Dependency store
 
-The store is the app's database of record. It is content-addressed, refcounted,
-and the sole source of truth for what is deployed into the game directory.
+The store keeps immutable file blobs, one manifest per package ID, the fresh
+SQLite ledger, and the pending-operation journal.
 
 ## Layout
 
-```
+```text
 %APPDATA%\StarVault\CCM\
   config.toml
   store\
-    blobs\<ab>\<sha256…>                 # every unique file content, once
-    packages\<id>\<rev>\manifest.json    # package revision → ordered file list
-    ledger.db                            # SQLite, single writer
+    pending-operation.json
+    blobs\<prefix>\<sha256>
+    packages\<package-id>\manifest.json
+    ledger.db
+    staging\...
+    backups\...
 ```
 
-- `<ab>` = first two hex chars of the SHA-256; standard content-addressed fan-out.
-- `<rev>` = content revision id (hash of manifest.json). Re-importing identical
-  content is a no-op at the storage layer.
-- Blobs are immutable. Nothing ever edits a file in `blobs/`.
+Blobs are immutable. Package and config writes use a temporary file, flush the
+contents, then atomically rename it into place.
 
-## Package manifests
+## Package manifest
 
-`manifest.json` for a revision:
+Each package ID has one current `manifest.json`. The manifest records the
+validated package ID, revision, faction, metadata, import time, and canonical
+file records.
 
-```json
-{
-  "id": "tarcade",
-  "rev": "b3da…",
-  "slot": "lotv",
-  "files": [
-    { "path": "slot/tarcade.SC2Map/Triggers", "sha256": "…", "size": 4681944 },
-    { "path": "mods/RaynorRogue.SC2Mod/DocumentHeader", "sha256": "…", "size": 834 }
-  ],
-  "dependencies": [
-    { "logical_path": "Mods/RaynorRogue.SC2Mod", "sha256": "<container digest>" }
-  ]
-}
-```
+The revision hash covers only:
 
-Two subtrees by convention, enforced at ingest (see package-model.md):
+- faction;
+- sorted canonical path;
+- SHA-256;
+- size.
 
-- `slot/**` — what a campaign slot receives (junction target or copy source).
-- `mods/**` — what mirrors into the game's `Mods\`, structure preserved.
+Metadata, package ID, and import time do not change the revision. An identical
+reimport therefore produces the same revision. Metadata edits replace the
+manifest atomically without changing it.
 
-## Ledger schema
+Reimporting an inactive package replaces its manifest atomically. Reimporting
+or removing the active package returns `active_package_requires_restore`.
+
+## Fresh ledger schema
 
 ```sql
-CREATE TABLE active_slots (
-  slot      TEXT PRIMARY KEY,   -- wol | hots | lotv | nco
-  rev       TEXT,               -- NULL = plain/default campaign
-  pkg_id    TEXT
+CREATE TABLE active_campaign (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    package_id TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    faction TEXT NOT NULL
 );
 
-CREATE TABLE deployments (
-  game_path TEXT NOT NULL,      -- Mods\SCORE\SCORE-Other.SC2Mod/... normalized
-  sha256    TEXT NOT NULL,
-  rev       TEXT NOT NULL,      -- owning package revision
-  PRIMARY KEY (game_path, rev)
-);
-
-CREATE TABLE blob_refs (
-  sha256    TEXT PRIMARY KEY,
-  refcount  INTEGER NOT NULL DEFAULT 0
+CREATE TABLE managed_mods (
+    path TEXT PRIMARY KEY COLLATE NOCASE,
+    sha256 TEXT NOT NULL,
+    disposition TEXT NOT NULL
+        CHECK (disposition IN ('created', 'borrowed'))
 );
 ```
 
-Every filesystem mutation happens inside a ledger transaction: write blobs
-first (harmless if orphaned), commit ledger rows, then mutate the game
-directory, then mark the transaction committed. Crash between steps leaves
-recoverable state; startup reconciliation detects and repairs drift.
+There is no deployments table or active-slot table. `active_campaign` has zero
+or one row. `managed_mods` records which paths StarVault created and which
+matching external paths it borrowed.
 
-## Deploy algorithm (M2: dumb-and-faithful)
+## Inventory and garbage collection
 
-1. Read `active_slots`. For each non-null slot, load its manifest.
-2. Union all `mods/**` entries across active manifests.
-3. Group by target game path:
-   - same hash from multiple packages → deploy once, refcount per contributing
-     revision;
-   - **different hashes for one path** → genuine conflict → block per M5 (see
-     slot-manager.md), never silently overwrite.
-4. Materialize: copy/link blobs into `Mods\` under their preserved relative
-   paths.
-5. Record deployments + bump blob refs in one transaction.
+Inventory returns valid packages and explicit corrupt-package records. It does
+not hide an unreadable manifest.
 
-Uninstall/deactivate decrements refs; zero-ref paths are removed from the game
-directory and zero-ref blobs are GC'd (deferred, batched).
+Garbage collection first reads every manifest and computes the reachable blob
+set. If any manifest is unreadable, collection aborts without deleting a blob.
+This rule trades leaked disk space for recoverable package data.
 
-Same-name-different-content mods coexist in the store by construction (M1);
-they can only collide at *deploy* time, where M5 policy applies.
+## Import limits
 
-## Import pipeline
+Archive analysis enforces these limits before commit:
 
-```
-zip ─▶ stream-hash files (never whole-archive in memory)
-    ─▶ normalize (package-model.md)
-    ─▶ identity check vs installed packages (K3 prompt)
-    ─▶ interactive confirm (UI shows title/author/slot guess/warnings)
-    ─▶ ingest: write blobs, write manifest, ledger tx
-```
+- 20,000 entries;
+- 2 GiB per file;
+- 8 GiB total declared uncompressed content;
+- 512 bytes per entry path;
+- free space of declared content plus 1 GiB.
 
-Progress events fire per-file with byte counts; cancellation leaves orphan
-blobs that startup GC reclaims.
+Extraction and ingestion run on blocking workers. Cancellation checks occur no
+more than 4 MiB apart, including within one large file. Each operation uses a
+unique scratch directory and removes it on every terminal state.
 
-## Integrity
+## Unsupported old stores
 
-- Startup reconciliation: verify each active slot's junction/copy target
-  against its manifest (spot-check hashes on copy strategy; existence checks on
-  junction strategy); verify deployed `Mods\` paths exist with right sizes.
-  Drift is repaired when possible, reported otherwise.
-- Full hash verification runs on demand ("Verify installation" action), not on
-  every startup — half-gigabyte packages make full verification a deliberate
-  act.
-
-## Future: registry (v2)
-
-Package identity (`[package] id` + `source.url`) is registry-ready today. A
-future registry serves signed manifests; the store gains a `sources` table and
-the importer gains a download backend. No schema change to blobs or manifests
-is anticipated.
+The fresh schema has no compatibility layer for the previous alpha store.
+Opening a legacy schema returns an unsupported-format error. Follow
+[`../alpha-reset.md`](../alpha-reset.md) instead of adding automatic
+conversion code.

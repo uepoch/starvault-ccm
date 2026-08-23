@@ -1,142 +1,81 @@
 # Package model
 
-A **package** is a distributable unit of custom campaign (a zip today, a
-registry artifact tomorrow). This document defines the formats, the normalizer
-that turns arbitrary layouts into canonical form, and the compatibility rules.
+A package is an imported custom campaign identified by a validated
+`PackageId`. The importer accepts community archive layouts and normalizes them
+to campaign and Mods records in the store manifest.
 
-## Evidence base
+## Package identity
 
-Behavior here is derived from the original CCM code and two real-world
-packages examined during planning:
+`PackageId` contains 1 to 64 lowercase ASCII characters. Alphanumeric segments
+use one dash as a separator. Validation rejects:
 
-- `example.zip` — game-mirror layout (`Maps/campaign/*.SC2Map/`, `Mods/` at
-  root), no metadata.txt, nested dependency `Mods\SCORE\SCORE-Other.SC2Mod`.
-  Broken under old CCM for three independent reasons.
-- `example-fixed.zip` — flat-waterfall output: maps at root, synthesized
-  metadata.txt, nested mod relocated to `Mods\SCORE-Other.SC2Mod`, exactly one
-  reference rewritten (`RaynorRogue.SC2Mod`'s DocumentHeader).
+- empty segments or repeated dashes;
+- path separators and rooted paths;
+- `plain`;
+- Windows device names;
+- trailing dots or spaces;
+- an ID that differs from an installed ID only by case.
 
-Both are committed as golden test vectors (reduced fixtures, not the 500 MB
-zips themselves).
+Every store entry point accepts the validated type rather than an unchecked
+string.
 
 ## Container discovery
 
-Containers are `.SC2Map` and `.SC2Mod` entries found anywhere in the archive,
-in either form:
+The importer finds `.SC2Map` and `.SC2Mod` containers anywhere in the archive.
+It supports loose directory containers and packed MPQ files. Extension and
+path matching follows Windows case-insensitive behavior.
 
-- **Directory containers**: `<name>.SC2Map/…` with loose internal files
-  (`DocumentHeader`, `DocumentInfo`, `ComponentList.SC2Components`, …).
-- **Packed containers**: single-file MPQ archives (`RandomBuff.SC2Mod`) whose
-  internals require MPQ reading.
+Dependency declarations in `DocumentHeader` and `DocumentInfo` are inspected
+for local Mod references. Blizzard-installed and Battle.net references remain
+external. An unresolved local reference is an import warning because some
+campaigns intentionally depend on separately installed content.
 
-Discovery is case-insensitive on extension and path segments (Windows
-filesystem semantics; observed mixed-case entries in the wild).
+## Metadata and faction
 
-## Dependency declarations
+Legacy `metadata.txt` values provide title, author, description, version, and
+a faction guess. The import wizard shows the guess and requires a user choice
+when no faction can be inferred.
 
-Dependencies live in two places per container and must agree:
+Metadata is not package identity and does not affect the revision. Editing it
+atomically replaces the manifest without rewriting blobs.
 
-- `DocumentHeader`: binary, `"H2CS"` magic, dependency count as `u32` at offset
-  44, null-terminated UTF-8 strings from offset 48.
-- `DocumentInfo`: XML with `<Dependencies><Value>…</Value></Dependencies>`
-  sections; entities must be decoded before comparison.
+## Canonical files and revision
 
-Reference forms:
+Normalization produces canonical campaign and Mods paths. It preserves nested
+Mods paths and never rewrites an MPQ container. Two source entries that map to
+one canonical path are accepted only when their content matches.
 
-| Form | Meaning | Action |
-|---|---|---|
-| `file:Mods\X.SC2Mod` | local mod reference | resolve within package `Mods/` subtree |
-| `file:Mods\Foo\Bar.SC2Mod` | **nested** local reference | preserve structure; never flatten |
-| `bnet:…` (possibly comma-combined with `file:`) | Battle.net fallback | leave untouched |
-| `file:Mods\Liberty.SC2Mod` etc. | Blizzard-installed mod set: `liberty`, `swarm`, `void`, `voidprologue`, `voidepilogue`, `novac` (.sc2mod) | leave untouched; resolves from game install |
+The revision is the hash of faction and sorted records containing path,
+SHA-256, and size. Package ID, metadata, and import time are excluded.
 
-Unresolved references (not bundled, not installed-set, no bnet fallback) are
-**warnings**, not errors: the package may still work if the user has the dep
-from another campaign. Warnings surface in the import wizard.
+The stored form is:
 
-## Legacy format: metadata.txt
-
-Parsed forever (decision K1). Flat `key=value` lines, split on first `=`,
-keys case-insensitive:
-
-| Key | Meaning |
-|---|---|
-| `title` | display name |
-| `author` | author |
-| `desc` | description |
-| `version` | version string |
-| `campaign` | slot guess |
-
-Slot guessing is fuzzy substring matching on the lowercased value, evaluated in
-order: `wings|liberty|wol` → WoL; `heart|swarm|hots` → HotS;
-`legacy|void|lotv` → LotV; `nova|covert|ops|nco` → NCO. The result is a
-**guess with the matched pattern attached**, shown to the user for
-confirmation at import (K2). A no-match result is an explicit "unknown slot"
-state in the UI — never a silent invisible bucket.
-
-## Native format: campaign.toml
-
-Generated by the importer for every ingested package; hand-writable by
-package authors going forward.
-
-```toml
-schema_version = 1
-
-[package]
-id = "tarcade"                 # stable slug; registry-ready identity (K1)
-title = "Arcade Missions"
-author = "Someone"
-version = "1.0.0"
-slot = "lotv"                  # wol | hots | lotv | nco
-
-[source]                       # optional; populated when a registry exists
-url = "https://ccm.starvault.dev/packages/tarcade"
-
-[[dependencies]]               # logical identity, as maps reference it
-path = "Mods/RaynorRogue.SC2Mod"
-sha256 = "<blob hash>"
-
-[[dependencies]]
-path = "Mods/SCORE/SCORE-Other.SC2Mod"
-sha256 = "<blob hash>"
+```text
+packages/<package-id>/manifest.json
 ```
 
-Rules:
+There is no revision directory and no `latest_rev` selection. A Library row
+always refers to the package's sole current revision.
 
-- `schema_version` gates all parsing; unknown major versions are refused with
-  an upgrade hint, unknown minor fields ignored.
-- `dependencies` records the logical path → content mapping used by the graph
-  resolver and the conflict detector. It is generated from parsed
-  declarations, not trusted blindly from hand-written files: ingest
-  re-verifies hashes against actual blobs.
-- The full file-integrity manifest (every file in the package → blob hash)
-  lives in the store's `manifest.json`, not in campaign.toml — campaign.toml
-  is the portable identity card, the manifest is the internal truth.
+## Replacement
 
-## Normalizer algorithm
+An identical inactive reimport is a content no-op. A different inactive
+reimport writes needed blobs, creates a complete temporary manifest, flushes
+it, then atomically replaces `manifest.json`.
 
-Input: zip entry list. Output: `PackagePlan` (slot tree + mods tree + warnings
-+ detected metadata). Ported from flat-waterfall's proven plan logic
-(`package-flattening.ts`), minus everything that rewrites MPQ contents.
+An active package cannot be replaced or removed. The command returns
+`active_package_requires_restore`, and the UI directs the user to Return to
+vanilla.
 
-1. Discover containers (above).
-2. Detect wrapper prefix: directory containing the unique `metadata.txt`; if
-   none, the common parent of all containers minus trailing `Maps`/`Mods`
-   segments. If neither applies, entries map through unchanged.
-3. Map outputs: maps → `slot/` root; mods → `mods/<original relative path
-   under Mods/>` preserving nesting; `metadata.txt` → recognized; stray files
-   (`readme.txt`, `Name`) → kept under `slot/`.
-4. Collision handling: two containers mapping to the same output path with
-   byte-identical content → deduplicate silently; differing content → hard
-   error naming both sources.
-5. Validate dependencies of every container; collect unresolved-reference
-   warnings.
-6. Emit plan. No MPQ writes ever occur during normalization or install;
-   reference rewriting remains a flat-waterfall/export concern.
+## Import operation lifecycle
 
-## Re-import rule (K3)
+The backend keeps an operation and its cancellation token addressable until
+terminal cleanup. Its state is one of:
 
-If an incoming package's identity (id, or title+author+version for legacy)
-matches an already-installed package revision, the UI prompts loudly:
-"replace entirely?" Replacement swaps the store revision atomically; active
-slots pointing at the old revision are flagged for reactivation.
+```text
+Analyzing | Ready | Ingesting | Cancelled | Failed | Completed
+```
+
+Analysis and ingestion run on blocking workers. Cancellation checks occur
+within large files, not only between files. Failure and cancellation remove
+the operation scratch directory before a retry can reuse the package ID.

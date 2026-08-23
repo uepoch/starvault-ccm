@@ -93,10 +93,13 @@ fn finish(
 
 fn format_error(context: &str, what: &str, e: crate::Error) -> crate::Error {
     match e {
-        crate::Error::Package(p) => crate::Error::Package(crate::PackageError {
-            context: format!("{context}:{}", p.context),
-            detail: p.detail,
-        }),
+        crate::Error::Package(mut package) => {
+            package.context = Some(match package.context {
+                Some(inner) => format!("{context}:{inner}"),
+                None => context.to_string(),
+            });
+            crate::Error::Package(package)
+        }
         other => pkg_err(context.to_string(), format!("{what}: {other}")),
     }
 }

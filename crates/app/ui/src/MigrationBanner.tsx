@@ -1,90 +1,97 @@
-import { errMessage } from "./errors";
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { Alert, Button, Group, Select, Stack, Text } from "@mantine/core";
+import { errMessage } from "./errors";
 import { SLOTS } from "./factions";
+import { listMigrationCandidates, migrateCandidate } from "./ipc";
+import type { MigrationCandidate } from "./types";
 
-interface Candidate {
-  path: string;
-  name: string;
-}
-
-/// Per-campaign import list for an old SC2CCM install (P2). Old files stay
-/// in place; cleanup is manual and documented.
-export default function MigrationBanner({ onMigrated }: { onMigrated: () => void }) {
-  const [candidates, setCandidates] = useState<Candidate[] | null>(null);
-  const [slots, setSlots] = useState<Record<string, string>>({});
+export default function MigrationBanner({
+  disabled = false,
+  onMigrated,
+}: {
+  disabled?: boolean;
+  onMigrated: () => void;
+}) {
+  const [candidates, setCandidates] = useState<MigrationCandidate[] | null>(null);
+  const [factions, setFactions] = useState<Record<string, string>>({});
   const [done, setDone] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<Candidate[]>("list_migration_candidates")
+    listMigrationCandidates()
       .then(setCandidates)
       .catch(() => setCandidates([]));
   }, []);
 
-  // Old install detected but nothing importable in Maps\Campaign: show
-  // nothing. There is no conflict to warn about, and the banner only
-  // matters when it offers an action.
   if (!candidates || candidates.length === 0) return null;
 
-  const migrate = async (candidate: Candidate) => {
-    const slot = slots[candidate.path];
-    if (!slot) return;
+  const migrate = async (candidate: MigrationCandidate) => {
+    if (disabled) return;
+    const faction = factions[candidate.candidate_id];
+    if (!faction) return;
     const id = candidate.name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
-    if (!id) return; // nothing slugifiable in the name
+    if (!id) return;
     try {
-      await invoke("migrate_candidate", { path: candidate.path, id, slot });
-      setDone((d) => [...d, candidate.path]);
+      await migrateCandidate(candidate.candidate_id, id, faction);
+      setDone((current) => [...current, candidate.candidate_id]);
+      setError(null);
       onMigrated();
-    } catch (e) {
-      setError(errMessage(e));
+    } catch (migrationError) {
+      setError(errMessage(migrationError));
     }
   };
 
-  const remaining = candidates.filter((c) => !done.includes(c.path));
+  const remaining = candidates.filter((candidate) => !done.includes(candidate.candidate_id));
+  const importedNames = candidates
+    .filter((candidate) => done.includes(candidate.candidate_id))
+    .map((candidate) => candidate.name);
 
   return (
     <Alert title="Old SC2CCM campaigns found" color="yellow">
       <Stack gap="sm">
         <Text size="sm">
-          These are campaigns from your old SC2CCM install. Pick the faction each was built for,
-          then Import: the campaign is copied into the library as a normal package (detected
-          metadata, editable, playable) and the originals stay untouched.
+          Choose the faction each campaign was built for, then import it. StarVault copies it into
+          the Library and leaves the original untouched.
         </Text>
         {error && (
           <Text c="red" size="sm">
             {error}
           </Text>
         )}
-        {remaining.map((c) => (
-          <Group key={c.path} justify="space-between">
-            <Text size="sm">{c.name}</Text>
+        {remaining.map((candidate) => (
+          <Group key={candidate.candidate_id} justify="space-between">
+            <Text size="sm">{candidate.name}</Text>
             <Group gap="xs">
               <Select
-                placeholder="Slot"
+                placeholder="Faction"
                 data={SLOTS}
                 w={110}
-                value={slots[c.path] ?? null}
-                onChange={(v) => setSlots((s) => ({ ...s, [c.path]: v ?? "" }))}
+                disabled={disabled}
+                value={factions[candidate.candidate_id] ?? null}
+                onChange={(value) =>
+                  setFactions((current) => ({
+                    ...current,
+                    [candidate.candidate_id]: value ?? "",
+                  }))
+                }
               />
               <Button
                 size="xs"
                 variant="light"
-                disabled={!slots[c.path]}
-                onClick={() => migrate(c)}
+                disabled={disabled || !factions[candidate.candidate_id]}
+                onClick={() => migrate(candidate)}
               >
                 Import
               </Button>
             </Group>
           </Group>
         ))}
-        {done.length > 0 && (
+        {importedNames.length > 0 && (
           <Text size="xs" c="dimmed">
-            Imported: {done.map((p) => p.split(/[\\/]/).pop()).join(", ")}
+            Imported: {importedNames.join(", ")}
           </Text>
         )}
       </Stack>

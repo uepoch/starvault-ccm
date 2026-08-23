@@ -97,16 +97,6 @@
       li {
         margin: 0.45rem 0;
       }
-      .screenshots {
-        display: grid;
-        gap: 0.75rem;
-        margin: 2.5rem 0 0;
-      }
-      .screenshots img {
-        width: 100%;
-        border: 1px solid #263444;
-        border-radius: 8px;
-      }
       footer {
         margin-top: 3.5rem;
         color: #8fa3b8;
@@ -155,43 +145,33 @@
           packages the old CCMv1 format could not handle just work.
         </li>
         <li>
-          <strong>Per-campaign save isolation.</strong> Saves and banks ride
-          with their mod profile, so you can safely switch between adventures
-          without losing track of progress.
+          <strong>Opt-in save isolation Beta.</strong> Enabling it first backs
+          up the selected profile. Save and profile settings stay locked while
+          a custom campaign is active.
         </li>
         <li>
-          <strong>Quick-play.</strong> One button resets the game to a clean
-          state, activates the chosen campaign, and launches it.
+          <strong>Quick-play.</strong> Play checks the current state, activates
+          the chosen campaign only when needed, and launches it.
         </li>
         <li>
-          <strong>Switches are transactions.</strong> Stage, verify, swap, roll
-          back on failure; a crash mid-switch repairs itself at next startup.
+          <strong>Journaled switches.</strong> StarVault stages and verifies the
+          whole target, records each swap phase, and keeps backups until the
+          ledger commit verifies.
         </li>
         <li>
           <strong>No dependency soup.</strong> Shared <code>.SC2Mod</code>
-          files are deduplicated; two campaigns shipping different bytes for the
-          same path are caught before disk changes anything.
+          files are deduplicated. A different unowned file at a target path
+          blocks activation before a swap.
         </li>
         <li>
           <strong>Migrates your old setup.</strong> Existing CCM campaigns
           import through the same checked pipeline; originals stay untouched.
         </li>
         <li>
-          <strong>Auto-updated.</strong> Anytime the opensource project release,
-          you get up-to-date instantly.
+          <strong>Signed updates.</strong> Official releases publish a signed
+          updater manifest only after tests and dependency audits pass.
         </li>
       </ul>
-
-      <div class="screenshots">
-        <img
-          src="screenshots/library.png"
-          alt="The library view listing imported campaigns"
-        />
-        <img
-          src="screenshots/campaign-select.png"
-          alt="The campaign selection cards"
-        />
-      </div>
 
       <footer>
         StarCraft II is a trademark of Blizzard Entertainment. This tool is

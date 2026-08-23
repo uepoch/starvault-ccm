@@ -289,8 +289,11 @@ fn basename_string(path: &Path) -> String {
 }
 
 fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let limits = crate::package::import::ArchiveLimits::default();
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
+    let mut entries_seen = 0_usize;
+    let mut total_bytes = 0_u64;
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)
             .map_err(|e| pkg_err(dir.display().to_string(), format!("unreadable: {e}")))?
@@ -298,15 +301,70 @@ fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
             let entry =
                 entry.map_err(|e| pkg_err(dir.display().to_string(), format!("bad entry: {e}")))?;
             let path = entry.path();
-            if path.is_dir() {
+            entries_seen += 1;
+            if entries_seen > limits.max_entries {
+                return Err(pkg_err(
+                    root.display().to_string(),
+                    format!(
+                        "package tree exceeds the {} entry limit",
+                        limits.max_entries
+                    ),
+                ));
+            }
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            if relative.to_string_lossy().len() > limits.max_path_bytes {
+                return Err(pkg_err(
+                    relative.display().to_string(),
+                    format!("package path exceeds {} bytes", limits.max_path_bytes),
+                ));
+            }
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|e| pkg_err(relative.display().to_string(), e.to_string()))?;
+            if is_link_or_reparse_point(&metadata) {
+                return Err(pkg_err(
+                    relative.display().to_string(),
+                    "symbolic links and junctions are not allowed in packages",
+                ));
+            }
+            if metadata.is_dir() {
                 stack.push(path);
-            } else {
+            } else if metadata.is_file() {
+                if metadata.len() > limits.max_file_bytes {
+                    return Err(pkg_err(
+                        relative.display().to_string(),
+                        "package file exceeds the 2 GiB limit",
+                    ));
+                }
+                total_bytes = total_bytes
+                    .checked_add(metadata.len())
+                    .ok_or_else(|| pkg_err("package", "package size overflows u64"))?;
+                if total_bytes > limits.max_total_bytes {
+                    return Err(pkg_err("package", "package exceeds the 8 GiB total limit"));
+                }
                 out.push(path);
+            } else {
+                return Err(pkg_err(
+                    relative.display().to_string(),
+                    "package entries must be regular files or directories",
+                ));
             }
         }
     }
     out.sort();
     Ok(out)
+}
+
+#[cfg(windows)]
+fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 fn common_container_parent(containers: &BTreeMap<PathBuf, bool>) -> PathBuf {

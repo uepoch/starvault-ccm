@@ -1,108 +1,75 @@
 # Game integration
 
-How the app finds, understands, and launches StarCraft II. All constants here
-are owned by `core::layout`; this document is their spec.
+`core::layout` owns install discovery and every StarCraft II path used by the
+workflow.
 
 ## Install discovery
 
-In order:
+StarVault checks the configured executable, Windows registry, known install
+locations, then the user-selected file. The chosen executable must exist and
+its parent must match a supported StarCraft II layout.
 
-1. Config file: `%APPDATA%\StarVault\CCM\config.toml` → `game.exe_path`.
-2. Registry probe (Windows): `HKLM\Software\Classes\Blizzard.SC2Save\
-   shell\open\command` — strip `" \"%1\""`, then two path segments
-   (`Support\SC2Switcher.exe` in the common case) to reach the install root;
-   candidate exe is `<root>\StarCraft II.exe`. Validated by existence.
-3. Common locations: `C:\Program Files (x86)\StarCraft II\StarCraft II.exe`.
-4. File picker.
+The game path is locked while a custom campaign is active. Changing it
+requires vanilla state so the ledger cannot refer to one install while files
+remain deployed in another.
 
-The old tool's known limitation stands: multiple SC2 installs resolve to one
-path, possibly not the launched one. Mitigation: Settings shows the resolved
-path prominently and launch pre-flight verifies it; a per-install override
-exists from day one.
+## Preflight and Play
 
-Known install layouts are recorded as data in the layout module (slot paths,
-plain-campaign contents per slot, prologue special cases), never scattered.
+Preflight checks:
 
-## Non-Windows / broken targets
+1. no unresolved operation journal exists;
+2. the executable and game layout are valid;
+3. StarCraft II is not running;
+4. the active campaign and managed Mods match the ledger;
+5. save ownership matches the active package when isolation is enabled;
+6. the requested package manifest is readable and verified.
 
-If the resolved target fails validation (missing exe, non-Windows layout), the
-app shows a polite setup screen — never a crash, never a silent wrong-path
-mode. Re-picking re-runs validation immediately.
+Play acquires the mutation lock before preflight. It activates the requested
+package only when it is not already active, then launches the game while still
+holding the lock.
 
-## Launch flow (X1)
+If process launch fails after activation commits, the package remains active
+and the command returns `launch_failed_after_activation`. Play never repeats a
+save or campaign swap after successful activation.
 
+## Vanilla state
+
+Vanilla means no StarVault package is active, no unchanged created Mod remains,
+and isolated saves have the plain owner. Borrowed Mods remain because StarVault
+does not own them.
+
+Return to vanilla and clear-all both refuse to run while StarCraft II is
+running. Clear-all calls restore first and deletes app data only after restore,
+verification, and journal cleanup succeed.
+
+## Save isolation Beta
+
+Save isolation is off by default. Enabling it requires vanilla state, a profile
+ID from fresh discovery, and a timestamped recovery backup of both `Saves` and
+`Banks`.
+
+The save owner is:
+
+```text
+plain | package(package_id)
 ```
-preflight():
-  1. exe exists and is executable
-  2. no running instance (named mutex / process scan)
-  3. active slots reconcile: junctions resolve, copy trees match manifests
-     (spot-check level)
-  4. deployed Mods\ paths exist (existence-level check)
-spawn:
-  detached process: <exe>            # no mutating arguments
-  on failure: typed error with OS message
-fallback:
-  if exe invalid → offer battlenet:// deep link (requires Battle.net app)
-```
 
-Launching **never mutates** slots or deployments. If pre-flight finds drift,
-it offers repair first; it does not silently fix and launch in one step.
+A transition receives the previous and target factions. It archives the
+previous faction's root campaign progress and materializes the target
+faction's set. `Saves\Campaign`, `Saves\Unsaved`, and non-vanilla banks move
+with the active package. Other faction root saves remain untouched.
 
-## Plain-campaign state
+Profile selection and disabling isolation require vanilla state. Discovery
+returns opaque IDs and labels. Commands resolve an ID only against the latest
+discovery result.
 
-"Restore to plain" means the slot directory contains what a fresh install
-provides for that slot (recorded per-slot in the layout module; HotS includes
-`evolution`, LotV accounts for the prologue directory). The installer does not
-ship Blizzard files; restore clears custom content and leaves the game's own
-resolution to apply. Where the original CCM left slots empty, we do the same —
-the game tolerates empty slot directories as "default."
+Documents managed by OneDrive are rejected for isolation. Cross-volume moves
+use copy-then-remove. Sharing violations receive bounded retries, and failure
+rolls the whole workflow back.
 
-## Version/patch interactions
+## External changes
 
-Battle.net repairs and patches can touch the game directory. Startup
-reconciliation treats unexpected foreign files inside slot directories as
-drift: reported, not auto-deleted. `Mods\` entries owned by us are verified
-against the ledger; unowned entries are ignored (we are a guest in Blizzard's
-directory).
-
-## Campaign lifecycle (confirmed against the real game)
-
-One game, one main menu. Clicking Campaign shows four faction entries
-(Wings of Liberty / Heart of the Swarm / Legacy of the Void / Nova Covert
-Ops). Selecting a faction and starting a campaign makes the game load that
-faction's first map (e.g. WoL's `raynor01`, then the hub map) from the
-faction's content location. Nothing auto-starts; the faction entry *is* the
-loader.
-
-Consequences:
-
-- Activating a package replaces the entrypoint of its faction: the menu
-  then leads into the custom campaign's first map instead of Blizzard's.
-  One campaign per faction at any time; restore hands the faction back.
-- Saves are bound to the exact map and its dependencies. Swapping a
-  faction's entrypoint strands that campaign's in-progress saves; the game
-  refuses them with a map-mismatch error. This is accepted behavior,
-  matching old CCM: no warning is shown (players have always lived with
-  it), but it is documented here.
-- Future idea (deferred): save-set isolation — see
-  `docs/design/research-save-isolation.md`. Key correction from research:
-  saves are **not** per-campaign directories; they are flat files named by
-  campaign ID (`LibertyCampaignSave.SC2Save`, …) directly under
-  `Accounts\<acct>\<profile>\Saves\`. Isolation therefore means
-  junctioning the whole `Saves` directory per faction slot, seeded from
-  live data on first activation, with OneDrive/multi-account detection at
-  discovery time. Revisit only if players ask.
-
-## Performance notes
-
-Real-time antivirus adds large per-file-open costs in `%APPDATA%`
-(measured: 80ms+ for a small JSON read, hundreds of ms when the file
-was just written). The store mitigates by design: content-addressed
-blobs and immutable manifests are memoized in memory for the process
-lifetime, and caches recompute in the background after mutations, so
-the UI never waits on disk after startup.
-
-For best latency users can exclude the app data folder
-(`%APPDATA%\StarVault\CCM`) from real-time scanning; the installer
-should offer this. The game directory itself should never be
-excluded on the tool's account.
+Battle.net repair, antivirus, synchronization tools, and users can change game
+files. Verification reports unexpected or changed managed paths as drift.
+StarVault does not delete an unowned file merely because it appears under a
+campaign or Mods directory.

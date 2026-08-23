@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState } from "react";
 import { notifications } from "@mantine/notifications";
 import {
   Alert,
@@ -18,13 +17,14 @@ import {
   TextInput,
   Title,
   Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   IconCircleCheck,
   IconFolder,
   IconPencil,
   IconPlayerPlay,
-  IconToggleRight,
+  IconRestore,
   IconTrash,
 } from "@tabler/icons-react";
 import {
@@ -37,18 +37,24 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from "@tanstack/react-table";
-import { FACTION_COLORS, FACTION_TITLES, SLOTS } from "./factions";
+import { REPAIRABLE_ERROR_CODES, toCommandError } from "./errors";
+import { FACTION_COLORS, FACTION_NAMES, FACTION_TITLES, SLOTS } from "./factions";
 import ImportWizard from "./ImportWizard";
+import {
+  activatePackage,
+  editPackageMetadata,
+  listLibrary,
+  playPackage,
+  removePackage,
+  repairActive,
+  restoreVanilla,
+  revealPackage,
+} from "./ipc";
 import MigrationBanner from "./MigrationBanner";
-import ConflictDialog from "./ConflictDialog";
-import { errMessage } from "./errors";
-import { useActivate } from "./activation";
-import type { LibraryEntry } from "./types";
+import type { CommandError, LibraryEntry, LibrarySnapshot } from "./types";
 
 const columnHelper = createColumnHelper<LibraryEntry>();
 
-// The tab unmounts Library on switch (fresh data on return); keep the
-// user's view - search, faction filter, sort - across those unmounts.
 const lastView = {
   search: "",
   factionFilter: null as string | null,
@@ -68,8 +74,9 @@ export default function Library({
   pendingZip: string | null;
   onZipConsumed: () => void;
 }) {
-  const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<LibrarySnapshot | null>(null);
+  const [loadError, setLoadError] = useState<CommandError | null>(null);
+  const [operationError, setOperationError] = useState<CommandError | null>(null);
   const [removing, setRemoving] = useState<LibraryEntry | null>(null);
   const [editing, setEditing] = useState<LibraryEntry | null>(null);
   const [editTitle, setEditTitle] = useState("");
@@ -78,11 +85,12 @@ export default function Library({
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const { activate: runActivate, conflict, setConflict } = useActivate();
+  const [pageBusy, setPageBusy] = useState<string | null>(null);
   const [search, setSearch] = useState(lastView.search);
   const [factionFilter, setFactionFilter] = useState<string | null>(lastView.factionFilter);
   const [sorting, setSorting] = useState<SortingState>(lastView.sorting);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(lastView.columnFilters);
+
   useEffect(() => {
     lastView.search = search;
     lastView.factionFilter = factionFilter;
@@ -90,16 +98,22 @@ export default function Library({
     lastView.columnFilters = columnFilters;
   }, [search, factionFilter, sorting, columnFilters]);
 
-  const refresh = () => {
-    invoke<LibraryEntry[]>("list_library")
-      .then((e) => {
-        setEntries(e);
-        setError(null);
-      })
-      .catch((e) => setError(errMessage(e)));
-  };
+  const refresh = useCallback(async () => {
+    try {
+      setSnapshot(await listLibrary());
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(toCommandError(error));
+    }
+  }, []);
 
-  useEffect(refresh, []);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const active = snapshot?.active_campaign ?? null;
+  const activeEntry = snapshot?.entries.find((entry) => entry.id === active?.id) ?? null;
+  const mutationsBlocked = snapshot === null || snapshot.health.state === "recovery_required";
 
   const openEdit = (entry: LibraryEntry) => {
     setEditing(entry);
@@ -113,18 +127,18 @@ export default function Library({
     if (!editing) return;
     setSaving(true);
     try {
-      await invoke("edit_package_metadata", {
+      await editPackageMetadata({
         id: editing.id,
         title: editTitle,
         author: editAuthor,
         version: editVersion,
         desc: editDesc,
       });
-      notifications.show({ color: "green", message: `Metadata of ${editing.id} updated.` });
+      notifications.show({ color: "green", message: `Metadata for ${editing.id} updated.` });
       setEditing(null);
-      refresh();
-    } catch (e) {
-      notifications.show({ color: "red", title: "Update failed", message: errMessage(e) });
+      await refresh();
+    } catch (error) {
+      setOperationError(toCommandError(error));
     } finally {
       setSaving(false);
     }
@@ -132,173 +146,203 @@ export default function Library({
 
   const activate = async (entry: LibraryEntry) => {
     setBusyId(entry.id);
+    setOperationError(null);
     try {
-      if (await runActivate(entry.slot, entry.id)) refresh();
+      await activatePackage(entry.id);
+      notifications.show({ color: "green", message: `${entry.title ?? entry.id} is active.` });
+      await refresh();
+    } catch (error) {
+      setOperationError(toCommandError(error));
     } finally {
       setBusyId(null);
     }
   };
 
-  const play = async (entry: LibraryEntry) => {
+  const play = async (entry: Pick<LibraryEntry, "id" | "title">) => {
     setBusyId(entry.id);
+    setOperationError(null);
     try {
-      await invoke("launch_package", { id: entry.id });
-      notifications.show({
-        color: "green",
-        message: `${entry.id} activated; game launching.`,
-      });
-      refresh();
-    } catch (e) {
-      notifications.show({ color: "red", title: "Play failed", message: errMessage(e) });
+      await playPackage(entry.id);
+      notifications.show({ color: "green", message: `${entry.title ?? entry.id} is launching.` });
+      await refresh();
+    } catch (error) {
+      setOperationError(toCommandError(error));
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const returnToVanilla = async () => {
+    setPageBusy("restore");
+    setOperationError(null);
+    try {
+      await restoreVanilla();
+      notifications.show({ color: "green", message: "Returned to vanilla." });
+      await refresh();
+    } catch (error) {
+      setOperationError(toCommandError(error));
+    } finally {
+      setPageBusy(null);
+    }
+  };
+
+  const repair = async () => {
+    setPageBusy("repair");
+    setOperationError(null);
+    try {
+      await repairActive();
+      notifications.show({ color: "green", message: "The active campaign was repaired." });
+      await refresh();
+    } catch (error) {
+      setOperationError(toCommandError(error));
+    } finally {
+      setPageBusy(null);
     }
   };
 
   const reveal = async (entry: LibraryEntry) => {
     try {
-      const path = await invoke<string>("reveal_package", { id: entry.id });
-      notifications.show({ color: "blue", message: `Opened ${path}.` });
-    } catch (e) {
-      notifications.show({ color: "red", title: "Could not open folder", message: errMessage(e) });
+      await revealPackage(entry.id);
+    } catch (error) {
+      setOperationError(toCommandError(error));
     }
   };
 
   const remove = async (entry: LibraryEntry) => {
     setBusyId(entry.id);
     setRemoving(null);
+    setOperationError(null);
     try {
-      await invoke("remove_package", { id: entry.id });
+      await removePackage(entry.id);
       notifications.show({ color: "green", message: `${entry.id} removed.` });
-      refresh();
-    } catch (e) {
-      notifications.show({ color: "red", title: "Remove failed", message: errMessage(e) });
+      await refresh();
+    } catch (error) {
+      setOperationError(toCommandError(error));
     } finally {
       setBusyId(null);
     }
   };
 
-  const columns = useMemo(
-    () => [
-      columnHelper.accessor((e) => e.title ?? e.id, {
-        id: "title",
-        header: "Title",
-        cell: (info) => (
-          <Stack gap={0}>
-            <Text fw={500}>{info.getValue()}</Text>
-            <Text size="xs" c="dimmed">
-              {info.row.original.version ?? info.row.original.id}
-            </Text>
-          </Stack>
-        ),
-      }),
-      columnHelper.accessor("author", {
-        header: "Author",
-        cell: (info) => info.getValue() ?? "—",
-      }),
-      columnHelper.accessor("slot", {
-        header: "Faction",
-        cell: (info) => (
-          <Badge variant="light" color={FACTION_COLORS[info.getValue()] ?? "gray"}>
-            {FACTION_TITLES[info.getValue()] ?? info.getValue()}
-          </Badge>
-        ),
-      }),
-      columnHelper.accessor("imported_at", {
-        header: "Imported",
-        cell: (info) => formatDate(info.getValue()),
-      }),
-      columnHelper.display({
-        id: "actions",
-        header: "",
-        cell: (info) => {
-          const entry = info.row.original;
-          const active = entry.active_on.length > 0;
-          const busy = busyId === entry.id;
-          return (
-            <Group gap="xs" wrap="nowrap" justify="flex-end">
-              <Tooltip label={active ? "Activated" : "Activate"} openDelay={300}>
-                <Button
-                  size="compact-sm"
-                  variant="subtle"
-                  color="gray"
-                  disabled={active || busy}
-                  px={5}
-                  onClick={() => activate(entry)}
-                  aria-label={active ? "Activated" : "Activate"}
-                >
-                  {active ? <IconCircleCheck size={16} /> : <IconToggleRight size={16} />}
-                </Button>
-              </Tooltip>
-              <Tooltip label="Edit metadata" openDelay={300}>
-                <Button
-                  size="compact-sm"
-                  variant="subtle"
-                  color="gray"
-                  disabled={busy}
-                  px={5}
-                  onClick={() => openEdit(entry)}
-                  aria-label="Edit metadata"
-                >
-                  <IconPencil size={16} />
-                </Button>
-              </Tooltip>
-              <Tooltip label="Open folder" openDelay={300}>
-                <Button
-                  size="compact-sm"
-                  variant="subtle"
-                  color="gray"
-                  disabled={busy}
-                  px={5}
-                  onClick={() => reveal(entry)}
-                  aria-label="Open folder"
-                >
-                  <IconFolder size={16} />
-                </Button>
-              </Tooltip>
+  const columns = [
+    columnHelper.accessor((entry) => entry.title ?? entry.id, {
+      id: "title",
+      header: "Title",
+      cell: (info) => (
+        <Stack gap={0}>
+          <Text fw={500}>{info.getValue()}</Text>
+          <Text size="xs" c="dimmed">
+            {info.row.original.version ?? info.row.original.id}
+          </Text>
+        </Stack>
+      ),
+    }),
+    columnHelper.accessor("author", {
+      header: "Author",
+      cell: (info) => info.getValue() ?? "—",
+    }),
+    columnHelper.accessor("faction", {
+      header: "Faction",
+      cell: (info) => (
+        <Badge variant="light" color={FACTION_COLORS[info.getValue()] ?? "gray"}>
+          {FACTION_TITLES[info.getValue()] ?? info.getValue()}
+        </Badge>
+      ),
+    }),
+    columnHelper.accessor("imported_at", {
+      header: "Imported",
+      cell: (info) => formatDate(info.getValue()),
+    }),
+    columnHelper.display({
+      id: "actions",
+      header: "",
+      cell: (info) => {
+        const entry = info.row.original;
+        const isActive = active?.id === entry.id;
+        const busy = busyId === entry.id;
+        const disabled = busy || pageBusy !== null || mutationsBlocked;
+        return (
+          <Group gap="xs" wrap="nowrap" justify="flex-end">
+            <Button
+              size="compact-sm"
+              variant={isActive ? "default" : "light"}
+              color="gray"
+              disabled={isActive || disabled}
+              leftSection={isActive ? <IconCircleCheck size={14} /> : undefined}
+              onClick={() => activate(entry)}
+            >
+              {isActive ? "Active" : "Activate"}
+            </Button>
+            <Button
+              size="compact-sm"
+              variant="light"
+              loading={busy}
+              disabled={disabled}
+              leftSection={<IconPlayerPlay size={14} />}
+              onClick={() => play(entry)}
+            >
+              Play
+            </Button>
+            <Tooltip label="Edit metadata" openDelay={300}>
               <Button
                 size="compact-sm"
-                variant="light"
-                loading={busy}
-                disabled={busy}
-                leftSection={<IconPlayerPlay size={14} />}
-                onClick={() => play(entry)}
+                variant="subtle"
+                color="gray"
+                disabled={disabled}
+                px={5}
+                onClick={() => openEdit(entry)}
+                aria-label={`Edit ${entry.id} metadata`}
               >
-                Play
+                <IconPencil size={16} />
               </Button>
-              <Tooltip label="Remove" openDelay={300}>
+            </Tooltip>
+            <Tooltip label="Open package folder" openDelay={300}>
+              <Button
+                size="compact-sm"
+                variant="subtle"
+                color="gray"
+                disabled={disabled}
+                px={5}
+                onClick={() => reveal(entry)}
+                aria-label={`Open ${entry.id} folder`}
+              >
+                <IconFolder size={16} />
+              </Button>
+            </Tooltip>
+            <Tooltip
+              label={isActive ? "Return to vanilla before removing this package." : "Remove"}
+              openDelay={300}
+            >
+              <span>
                 <Button
                   size="compact-sm"
                   variant="subtle"
                   color="red"
-                  disabled={busy}
+                  disabled={isActive || disabled}
                   px={5}
                   onClick={() => setRemoving(entry)}
-                  aria-label="Remove"
+                  aria-label={`Remove ${entry.id}`}
                 >
                   <IconTrash size={16} />
                 </Button>
-              </Tooltip>
-            </Group>
-          );
-        },
-      }),
-    ],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId],
-  );
+              </span>
+            </Tooltip>
+          </Group>
+        );
+      },
+    }),
+  ];
 
   const table = useReactTable({
-    data: entries ?? [],
+    data: snapshot?.entries ?? [],
     columns,
     state: { sorting, columnFilters, globalFilter: search },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setSearch,
-    globalFilterFn: (row, _columnId, value) => {
-      const e = row.original as LibraryEntry;
-      const hay = `${e.title ?? ""} ${e.author ?? ""} ${e.desc ?? ""} ${e.id}`.toLowerCase();
-      return hay.includes(value.toLowerCase());
+    globalFilterFn: (row, _columnId, value: string) => {
+      const entry = row.original;
+      const haystack = `${entry.title ?? ""} ${entry.author ?? ""} ${entry.desc ?? ""} ${entry.id}`;
+      return haystack.toLowerCase().includes(value.toLowerCase());
     },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
@@ -306,26 +350,136 @@ export default function Library({
   });
 
   useEffect(() => {
-    setColumnFilters(factionFilter ? [{ id: "slot", value: factionFilter }] : []);
+    setColumnFilters(factionFilter ? [{ id: "faction", value: factionFilter }] : []);
   }, [factionFilter]);
+
+  const healthRepairable = snapshot?.health.issues.some((issue) => issue.repairable) ?? false;
+  const errorRepairable = operationError ? REPAIRABLE_ERROR_CODES.has(operationError.code) : false;
 
   return (
     <Stack p="lg" gap="lg" h="calc(100vh - 50px)">
       <Group justify="space-between">
         <Title order={2}>Library</Title>
         <ImportWizard
-          knownIds={new Set(entries?.map((e) => e.id) ?? [])}
+          knownIds={new Set(snapshot?.entries.map((entry) => entry.id) ?? [])}
+          activePackageId={active?.id ?? null}
+          disabled={mutationsBlocked}
           onImported={refresh}
           pendingZip={pendingZip}
           onZipConsumed={onZipConsumed}
         />
       </Group>
 
-      <MigrationBanner onMigrated={refresh} />
+      <Card withBorder>
+        <Group justify="space-between" align="center">
+          <Stack gap={3}>
+            <Text size="xs" tt="uppercase" c="dimmed" fw={700}>
+              Active campaign
+            </Text>
+            {active ? (
+              <Group gap="sm">
+                <Text fw={600}>{activeEntry?.title ?? active.id}</Text>
+                <Badge variant="light" color={FACTION_COLORS[active.faction] ?? "gray"}>
+                  {FACTION_NAMES[active.faction] ?? active.faction}
+                </Badge>
+                <Text size="xs" c="dimmed">
+                  Revision {active.revision.slice(0, 12)}
+                </Text>
+              </Group>
+            ) : (
+              <Stack gap={0}>
+                <Text fw={600}>Vanilla</Text>
+                <Text size="xs" c="dimmed">
+                  No custom campaign is active.
+                </Text>
+              </Stack>
+            )}
+          </Stack>
+          {active && (
+            <Group gap="xs">
+              <Button
+                leftSection={<IconPlayerPlay size={16} />}
+                loading={busyId === active.id}
+                disabled={pageBusy !== null || mutationsBlocked}
+                onClick={() => play({ id: active.id, title: activeEntry?.title ?? null })}
+              >
+                Play
+              </Button>
+              <Button
+                variant="default"
+                leftSection={<IconRestore size={16} />}
+                loading={pageBusy === "restore"}
+                disabled={busyId !== null || mutationsBlocked}
+                onClick={returnToVanilla}
+              >
+                Return to vanilla
+              </Button>
+            </Group>
+          )}
+        </Group>
+      </Card>
 
-      {error && (
-        <Alert color="red" title="Error">
-          {error}
+      <MigrationBanner disabled={mutationsBlocked} onMigrated={refresh} />
+
+      {snapshot && snapshot.health.state !== "ready" && (
+        <Alert
+          color={snapshot.health.state === "recovery_required" ? "red" : "yellow"}
+          title={
+            snapshot.health.state === "recovery_required"
+              ? "Recovery required"
+              : "Library needs attention"
+          }
+        >
+          <Stack gap="xs">
+            {snapshot.health.issues.map((issue) => (
+              <Text size="sm" key={`${issue.code}:${issue.path ?? ""}`}>
+                {issue.message}
+              </Text>
+            ))}
+            {healthRepairable && (
+              <Button
+                size="xs"
+                variant="light"
+                color="yellow"
+                w="fit-content"
+                loading={pageBusy === "repair"}
+                onClick={repair}
+              >
+                Repair active campaign
+              </Button>
+            )}
+          </Stack>
+        </Alert>
+      )}
+
+      {loadError && (
+        <Alert color="red" title="Library could not be loaded">
+          {loadError.message}
+        </Alert>
+      )}
+
+      {operationError && (
+        <Alert
+          color="red"
+          title="Operation failed"
+          withCloseButton
+          onClose={() => setOperationError(null)}
+        >
+          <Stack gap="xs">
+            <Text size="sm">{operationError.message}</Text>
+            {errorRepairable && (
+              <Button
+                size="xs"
+                variant="light"
+                color="red"
+                w="fit-content"
+                loading={pageBusy === "repair"}
+                onClick={repair}
+              >
+                Repair active campaign
+              </Button>
+            )}
+          </Stack>
         </Alert>
       )}
 
@@ -334,7 +488,7 @@ export default function Library({
           placeholder="Search title, author, description…"
           leftSection={<Text size="sm">⌕</Text>}
           value={search}
-          onChange={(e) => setSearch(e.currentTarget.value)}
+          onChange={(event) => setSearch(event.currentTarget.value)}
           w={320}
         />
         <Select
@@ -347,13 +501,13 @@ export default function Library({
         />
       </Group>
 
-      {entries === null && !error && (
+      {snapshot === null && !loadError && (
         <Center>
           <Loader size="sm" />
         </Center>
       )}
 
-      {entries !== null && table.getRowModel().rows.length === 0 && (
+      {snapshot !== null && table.getRowModel().rows.length === 0 && (
         <Text c="dimmed">No packages match. Drop a campaign zip to import it.</Text>
       )}
 
@@ -368,18 +522,31 @@ export default function Library({
                 background: "var(--mantine-color-body)",
               }}
             >
-              {table.getHeaderGroups().map((hg) => (
-                <Table.Tr key={hg.id}>
-                  {hg.headers.map((header) => (
-                    <Table.Th
-                      key={header.id}
-                      onClick={header.column.getToggleSortingHandler()}
-                      style={{ cursor: header.column.getCanSort() ? "pointer" : undefined }}
-                    >
-                      {flexRender(header.column.columnDef.header, header.getContext())}
-                      {{ asc: " ↑", desc: " ↓" }[header.column.getIsSorted() as string] ?? ""}
-                    </Table.Th>
-                  ))}
+              {table.getHeaderGroups().map((headerGroup) => (
+                <Table.Tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => {
+                    const sorted = header.column.getIsSorted();
+                    const canSort = header.column.getCanSort();
+                    const ariaSort =
+                      sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none";
+                    return (
+                      <Table.Th key={header.id} aria-sort={canSort ? ariaSort : undefined}>
+                        {canSort ? (
+                          <UnstyledButton
+                            onClick={header.column.getToggleSortingHandler()}
+                            w="100%"
+                            py={4}
+                            style={{ textAlign: "inherit" }}
+                          >
+                            {flexRender(header.column.columnDef.header, header.getContext())}
+                            {sorted === "asc" ? " ↑" : sorted === "desc" ? " ↓" : ""}
+                          </UnstyledButton>
+                        ) : (
+                          flexRender(header.column.columnDef.header, header.getContext())
+                        )}
+                      </Table.Th>
+                    );
+                  })}
                 </Table.Tr>
               ))}
             </Table.Thead>
@@ -406,8 +573,8 @@ export default function Library({
       >
         <Stack gap="sm">
           <Text size="sm">
-            Delete `{removing?.id}` and its files from the store. Packages that are active on a
-            faction must be restored first.
+            Delete {removing?.id} and its files from the store. An active package can only be
+            removed after you return to vanilla.
           </Text>
           <Group justify="flex-end">
             <Button variant="default" onClick={() => setRemoving(null)}>
@@ -429,22 +596,22 @@ export default function Library({
           <TextInput
             label="Title"
             value={editTitle}
-            onChange={(e) => setEditTitle(e.currentTarget.value)}
+            onChange={(event) => setEditTitle(event.currentTarget.value)}
           />
           <TextInput
             label="Author"
             value={editAuthor}
-            onChange={(e) => setEditAuthor(e.currentTarget.value)}
+            onChange={(event) => setEditAuthor(event.currentTarget.value)}
           />
           <TextInput
             label="Version"
             value={editVersion}
-            onChange={(e) => setEditVersion(e.currentTarget.value)}
+            onChange={(event) => setEditVersion(event.currentTarget.value)}
           />
           <Textarea
             label="Description"
             value={editDesc}
-            onChange={(e) => setEditDesc(e.currentTarget.value)}
+            onChange={(event) => setEditDesc(event.currentTarget.value)}
             autosize
             maxRows={6}
           />
@@ -458,8 +625,6 @@ export default function Library({
           </Group>
         </Stack>
       </Modal>
-
-      <ConflictDialog state={conflict} onClose={() => setConflict(null)} onDone={refresh} />
     </Stack>
   );
 }

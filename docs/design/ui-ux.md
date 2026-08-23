@@ -1,70 +1,74 @@
-# UI / UX
+# UI and UX
 
-Frontend: React + Vite + TypeScript + Mantine, talking to the core through
-typed Tauri commands. The frontend holds no domain logic; it renders core
-state and forwards intents.
+The frontend presents core state. It does not plan deployment or merge package
+state on its own.
 
-## Screens
+## Navigation
 
-1. **Library.** Grid of installed packages: cover art (when present), title,
-   author, version, slot badge, status (active where, warnings count). Actions:
-   activate, replace/re-import, remove, show files. Drag-drop zips anywhere →
-   import wizard.
-2. **Campaigns.** Four slot cards (WoL / HotS / LotV / NCO) mirroring the
-   mental model every CCM user already has. Each card: current content ("Plain
-   campaign" or package title+version), Activate (package picker filtered by
-   slot), Restore to plain, warning icon with explanatory tooltip.
-3. **Log.** Chronological operation log (imported X, switched Y, repaired Z),
-   filterable, copyable — the support artifact.
-4. **Settings.** Game exe path (validated live), store location, strategy
-   override (junction/copy), telemetry opt-in toggle, about + naming policy.
+The app has Library, Log, and Settings tabs. There is no Campaigns tab.
 
-## Flows
+Library shows the global active state above the package table. An active
+summary includes faction, revision, Play, and Return to vanilla. An inactive
+row has separate Activate and Play actions. The active row disables Activate
+and keeps Play available.
 
-### Import wizard (K2)
+Removing or reimporting the active package explains that the user must return
+to vanilla first.
 
+## Health and repair
+
+Library renders `Health.state` as ready, drifted, or recovery required. It
+lists each issue returned by the core. Recovery-required state disables normal
+mutations.
+
+For health issues, the frontend offers Repair only when the backend sets the
+issue's `repairable` flag. For command failures, where the wire type has no
+repair flag, a small stable error-code allowlist controls the same affordance.
+Retryability alone never turns an unrelated failure into a Repair prompt.
+
+## Import
+
+The import reducer mirrors the backend states:
+
+```text
+Analyzing | Ready | Ingesting | Cancelled | Failed | Completed
 ```
-drop/browse ─▶ analyze (progress per file)
-            ─▶ confirm: detected title/author/slot guess [editable]
-                        warnings list (unresolved deps, dedup notes)
-                        replace-existing prompt when identity matches (K3)
-            ─▶ ingest (progress, cancellable)
-            ─▶ done: "Activate now?" shortcut
-```
 
-Slot guess shows its basis ("matched 'lotv' in campaign=Legacy of the Void").
-Unknown slot is an explicit choice the user makes from four buttons — nothing
-is ever silently bucketed.
+Closing the wizard cancels any nonterminal operation and lets backend cleanup
+finish. A failed operation can be retried after the backend has released its
+scratch state. Reimporting the active package is blocked with a Return to
+vanilla explanation.
 
-### Conflict dialog (M5)
+## Migration
 
-Names both packages, the conflicting `Mods\` path, and both content hashes'
-owners. Options: deactivate other slot / reset other slot to plain / cancel.
-No "overwrite" option exists anywhere in the product.
+Migration discovery returns opaque candidate IDs and display labels. The
+frontend sends the candidate ID, destination package ID, and faction. It never
+sends a source path selected or copied from page state.
 
-### Migration (P2)
+## Settings
 
-On first run, detect `%APPDATA%\SC2CCM\SC2CCM.txt` and a populated
-`CustomCampaigns\`: offer "Import your existing campaigns?" Per-campaign list
-with detected metadata, import runs the normal pipeline (so legacy packages
-get normalized, hashed, and given campaign.toml). Old CCM files are left in
-place; cleanup is manual and documented.
+While a campaign is active, Settings disables:
 
-## Progress and cancellation
+- game executable path and discovery;
+- deployment strategy;
+- save isolation;
+- save profile selection.
 
-Every long operation emits structured progress events (operation id, phase,
-bytes done/total, current file). Cancel is honored at file boundaries; partial
-imports reclaim orphan blobs at next startup GC.
+Save isolation is labeled Beta. Profiles use opaque IDs and human-readable
+labels returned by discovery.
 
-## Error presentation
+## Errors
 
-Typed errors map to human sentences plus a "details" expander with the raw
-chain. `Internal` errors additionally get a report-id when telemetry is opted
-in. The log screen records everything regardless of telemetry settings.
+The frontend receives `CommandError`, shows its stable message, and may show a
+safe path supplied for user action. It never renders a raw diagnostic chain.
+Internal errors may include a report ID. Full diagnostics remain in the Log
+tab.
 
-## Visual direction
+## Accessibility and visual language
 
-Dark-first, dense but calm; Mantine components with a restrained SC2-flavored
-accent palette. Slot cards are the visual anchor — the four-slot grid should be
-recognizable to CCM users within one glance. No decorative animation beyond
-functional transitions (staging progress, swap completion).
+The UI keeps the existing dark Mantine theme and faction colors. The active
+campaign summary is the page's visual anchor.
+
+Sortable table headers contain keyboard-operable buttons. The header cell
+updates `aria-sort` to `none`, `ascending`, or `descending`. Icon-only actions
+have package-specific accessible labels.

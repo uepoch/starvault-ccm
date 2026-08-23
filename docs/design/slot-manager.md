@@ -1,89 +1,115 @@
-# Slot manager
+# Campaign deployment workflow
 
-Campaign slots are the four fixed locations the game reads:
+The filename remains for old links, but campaign deployment no longer manages
+independent active slots. One workflow transitions the entire game between
+vanilla and one package.
 
-| Slot | Directory |
-|---|---|
-| WoL | `<SC2>\Maps\Campaign` |
-| HotS | `<SC2>\Maps\Campaign\swarm` (+ `\evolution`) |
-| LotV | `<SC2>\Maps\Campaign\void` (+ prologue dir handled via `Mods`/layout rules) |
-| NCO | `<SC2>\Maps\Campaign\nova` |
+## Journal
 
-Exact layout constants live exclusively in `core::layout` (architecture rule 2).
-A slot holds either the plain Blizzard campaign (empty/default) or exactly one
-package revision's `slot/` subtree.
+`pending-operation.json` sits beside the store and contains:
 
-## Transaction state machine
-
-Every switch — activate, restore-to-plain, replace-on-reimport — runs the same
-transaction:
-
-```
-Idle ──begin──▶ Staging ──verify ok──▶ Verified ──swap──▶ Committed
-                   │                      │
-                   └──failure──▶ RolledBack ◀──swap failure──┘
-```
-
-- **Staging.** Copy strategy: materialize the package's `slot/` tree into
-  `<slot>.staging-<n>` inside the same parent directory (same volume ⇒ atomic
-  rename later). Junction strategy: create a junction at a temp name pointing
-  at `store/packages/<id>/<rev>/slot/`.
-- **Verified.** Copy: spot-check file count + sizes against the manifest, full
-  hash check only on demand. Junction: verify target exists and is readable.
-- **Swap.** Rename current slot contents aside to `<slot>.backup-<n>` (or drop
-  the old junction), rename staged entry into place. Same-volume renames give
-  near-atomicity; the window where the slot has no contents is microseconds.
-- **Committed.** Delete backup. Ledger records the new active revision.
-- **RolledBack.** Restore backup / remove temp junction; ledger unchanged;
-  error surfaces with the exact failing path.
-
-Crash recovery: leftover `.staging-*` and `.backup-*` directories are detected
-at startup; backups older than the last committed ledger state are restored,
-staging dirs reclaimed.
-
-## Strategies
-
-```rust
-pub trait SlotStrategy {
-    fn stage(&self, tx: &SlotTransaction) -> Result<Staged>;
-    fn verify(&self, tx: &SlotTransaction, staged: &Staged) -> Result<()>;
-    fn swap(&self, tx: &SlotTransaction, staged: Staged) -> Result<()>;
-}
+```text
+version
+operation_id
+kind: activate | restore | repair
+phase:
+  preparing
+  prepared
+  saves_swapped
+  slots_swapped
+  mods_swapped
+  ledger_committed
+  rollback_verified
+previous_campaign
+target_campaign
+saves_participated
+backup paths
+staging paths
+save recovery proof
+previous and target campaign-slot object identities
+Mods rollback-plan digest
+repair backup identities
 ```
 
-- **Junction (default).** NTFS directory junctions need no admin rights; the
-  game reads through them. Switching is instant and near-atomic; disk usage
-  halves. Risks managed explicitly:
-  - dangling junctions → startup guard re-points or flags;
-  - unsupported volumes/filesystems → automatic fallback to copy at
-    activation time, recorded in config;
-  - user deletes through the junction path → integrity reconciliation catches
-    missing store content and reports which package is affected.
-- **Copy (fallback).** Always available; slower and doubles disk usage; chosen
-  automatically when junction creation fails, or manually in Settings.
+The workflow first writes a `preparing` journal that owns every deterministic
+staging and backup path. It then stages the resources and atomically advances
+the journal to `prepared`, including the save recovery proof, exact previous
+and target slot identities, the Mods rollback-plan digest, and any repair
+backup identity. The save proof binds the operation, ownership transition,
+previous and target Saves and Banks trees, and every archived save-set update.
+The slot identities bind each faction path to its exact object kind and content
+or junction target. Recovery therefore accepts only the prepared previous or
+target state, rather than trusting a replacement that happens to occupy an
+expected path. This makes a process exit during staging recoverable without
+scanning for filename patterns. The journal is flushed before each destructive
+phase, and backups remain until the ledger commits and the final tree verifies.
 
-Both strategies sit behind the identical trait; the choice is per-install, not
-per-code-path.
+## Activation
 
-## Cross-slot conflicts (M5)
+Activation runs in this order:
 
-The four slots are simultaneously active and share one runtime namespace:
-`Mods\`. Activation therefore computes the union of `mods/**` across all would-
-be-active revisions (dependency-store.md §deploy):
+1. refuse the operation while StarCraft II is running;
+2. recover or reject an existing journal;
+3. load and hash-verify the target manifest;
+4. verify the current owned campaign files and managed Mods;
+5. write the `preparing` journal with every owned artifact path;
+6. stage the complete target campaign and Mods trees;
+7. reject a different unowned file already present at a target Mods path;
+8. classify an identical unowned file as borrowed and advance the journal to
+   `prepared`;
+9. transition saves when isolation is enabled;
+10. restore the previous campaign files and deploy the target;
+11. replace the managed Mods set;
+12. commit the active campaign and managed Mods rows;
+13. verify the result, delete backups, and clear the journal.
 
-- no divergence → proceed;
-- same path, different bytes → **block this activation**, name both packages
-  and the path, and offer:
-  1. deactivate the conflicting slot (its campaign goes back to plain),
-  2. reset the other slot to plain campaign and retry,
-  3. cancel.
+Save, campaign, or Mods errors abort the operation. The workflow restores the
+previous state and returns the error. It does not log and continue.
 
-The UI never allows a deployment whose reported state would differ from reality.
+## Managed Mods
 
-## Operations surface
+Every deployed path has one disposition:
 
-- `activate(slot, rev)` — transaction above.
-- `restore(slot)` — return slot to plain Blizzard state (clears to default
-  layout contents; layout module defines what "plain" means per slot).
-- `deactivate(slot)` — restore + clear ledger row + release dep refs.
-- `verify_all()` — full manifest hash pass over slots and deployed mods.
+- `created` means StarVault wrote the file;
+- `borrowed` means the same bytes already existed outside StarVault ownership.
+
+Restore removes a created file only when its current hash still matches the
+ledger. It never removes a borrowed file. A changed managed file blocks the
+operation and remains on disk for inspection or repair.
+
+File-to-directory and directory-to-file replacements use staging and backups.
+Filesystem code handles regular files, directories, symbolic links, and
+Windows directory junctions according to their actual type.
+
+## Restore and repair
+
+`restore_vanilla()` transitions isolated saves to the plain owner, restores
+the active campaign files, removes unchanged created Mods, preserves borrowed
+Mods, commits an empty `active_campaign`, then verifies vanilla.
+
+`repair_active()` uses the same journal and target manifest. The explicit
+Repair action backs up and replaces drifted StarVault-created files. It never
+overwrites a borrowed file; changed borrowed content returns a typed error.
+
+## Recovery
+
+On startup the workflow reads both the journal and the ledger. A `preparing`
+operation has not touched live game data, so recovery removes all journal-owned
+partial staging artifacts. Otherwise, if the ledger still names
+`previous_campaign`, it rolls the filesystem back. If the ledger names
+`target_campaign`, it verifies the target and finalizes cleanup. Reading the
+ledger is required because a process can stop after the SQLite commit but
+before it writes the `ledger_committed` checkpoint. Any other combination
+produces `recovery_required`. Journal loading and removal also verify the
+opened journal object's identity, size, schema, and exact expected contents so
+a link or file substitution cannot redirect recovery or cleanup.
+
+Recovery-required state preserves the journal, staging trees, and backups. All
+mutations remain blocked until a repair or operator action can prove one state.
+
+## Junction and copy behavior
+
+The game layout may use directory junctions or copies behind the same staged
+workflow. Save moves across volumes detect `ErrorKind::CrossesDevices` and use
+copy-then-remove. Sharing violations from antivirus or OneDrive receive a
+bounded retry. Exhausted retries roll back.
