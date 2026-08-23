@@ -1,0 +1,13 @@
+# pi-lens scopes its secret scan by extending this file. Build artifacts
+# (target/, node_modules/) are never committed and their compiled symbol
+# tables trip the generic-api-key heuristic.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Build artifacts and dependency trees are not source."
+paths = [
+  '''target/.*''',
+  '''node_modules/.*''',
+  '''.*\.rmeta''',
+]
