@@ -76,7 +76,7 @@ fn creates_only_the_version_two_single_campaign_schema() {
 }
 
 #[test]
-fn rejects_a_legacy_schema_without_migrating_it() {
+fn rejects_an_unknown_schema_without_modifying_it() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("store");
     std::fs::create_dir_all(&root).unwrap();
@@ -88,25 +88,11 @@ fn rejects_a_legacy_schema_without_migrating_it() {
 
     let error = Store::open_for_tests(&root)
         .err()
-        .expect("legacy schema was accepted");
+        .expect("unknown schema was accepted");
     assert_eq!(error.code(), "unsupported_store_schema");
     let connection = rusqlite::Connection::open(root.join("ledger.db")).unwrap();
     assert!(connection.prepare("SELECT slot FROM active_slots").is_ok());
     assert!(connection.prepare("SELECT * FROM active_campaign").is_err());
-}
-
-#[test]
-fn rejects_legacy_revision_directories_even_without_a_ledger() {
-    let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path().join("store");
-    std::fs::create_dir_all(root.join("packages/alpha/deadbeef")).unwrap();
-    std::fs::write(root.join("packages/alpha/deadbeef/manifest.json"), b"{}").unwrap();
-
-    let error = Store::open_for_tests(&root)
-        .err()
-        .expect("legacy package layout was accepted");
-    assert_eq!(error.code(), "unsupported_store_format");
-    assert!(!root.join("ledger.db").exists());
 }
 
 #[test]

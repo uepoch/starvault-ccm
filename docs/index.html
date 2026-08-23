@@ -6,7 +6,7 @@
     <title>StarVault CCM · StarCraft II custom campaign manager</title>
     <meta
       name="description"
-      content="StarVault CCM, the unworthy successor of 7Ace's CCM. Install, switch, and launch StarCraft II custom campaigns."
+      content="Install, switch, and launch StarCraft II custom campaigns with StarVault CCM for Windows."
     />
     <style>
       :root {
@@ -54,14 +54,18 @@
       .tagline a:hover {
         color: #dfe9f2;
       }
+      .summary {
+        color: #c3d2df;
+        font-size: 1.05rem;
+        margin: 1.5rem 0 0;
+      }
       .downloads {
         display: flex;
         gap: 0.75rem;
         flex-wrap: wrap;
         margin: 2.25rem 0 0.5rem;
       }
-      a.btn,
-      span.btn {
+      a.btn {
         display: inline-block;
         font-weight: 600;
         padding: 0.65rem 1.4rem;
@@ -74,12 +78,6 @@
       }
       a.btn:hover {
         background: #6cb2ff;
-      }
-      span.btn.disabled {
-        background: transparent;
-        color: #5c7089;
-        border: 1px dashed #263444;
-        cursor: default;
       }
       .alpha-note {
         color: #8fa3b8;
@@ -113,59 +111,71 @@
         <div>
           <h1>StarVault <span>CCM</span></h1>
           <p class="tagline">
-            The unworthy successor of
+            A successor to
             <a href="https://github.com/7thAce/SC2CCM">7Ace's CCM</a>.
           </p>
         </div>
       </div>
 
+      <p class="summary">
+        Keep one custom campaign active, switch back to vanilla when you are
+        done, and launch through Battle.net from the same Library screen.
+      </p>
+
       <div class="downloads">
         <a
           class="btn"
           href="https://github.com/uepoch/starvault-ccm/releases/latest"
-          >Download for Windows (Alpha)</a
+          >Download for Windows 10+ (Alpha)</a
         >
-        <span class="btn disabled">macOS coming soon</span>
       </div>
       <p class="alpha-note">
-        Pre-Alpha releases. If a campaign package fails to import, please
+        This is alpha software. If a campaign fails to import or recover,
         <a href="https://github.com/uepoch/starvault-ccm/issues">report it</a>
         or
         <a href="https://discord.com/users/440833687257481227"
           >ping me on Discord</a
         >
-        with the operation log.
+        with the operation log. Review the log before sharing it because it
+        contains local file paths.
       </p>
 
-      <h2>Features</h2>
+      <h2>What it does</h2>
       <ul>
         <li>
-          <strong>Import anything the community ships.</strong> Zip or
-          drag-and-drop, packed or unpacked, nested layouts included; most
-          packages the old CCMv1 format could not handle just work.
+          <strong>One active campaign.</strong> Library shows exactly what is
+          active and provides a clear Return to vanilla action.
         </li>
         <li>
-          <strong>Opt-in save isolation Beta.</strong> Enabling it first backs
+          <strong>Flexible imports.</strong> Import zip archives with packed or
+          unpacked maps and Mods. The importer handles common wrapper folders
+          and nested game layouts, and shows the detected faction before it
+          writes the package.
+        </li>
+        <li>
+          <strong>Separate Activate and Play actions.</strong> Activate prepares
+          the campaign without launching the game. Play activates only when
+          needed, then starts StarCraft II.
+        </li>
+        <li>
+          <strong>Recoverable switching.</strong> StarVault records each swap
+          phase and keeps its backups until the new state commits. If the app
+          stops midway, startup recovery finishes or rolls back the operation.
+        </li>
+        <li>
+          <strong>External Mods stay visible.</strong> Matching files are left
+          in place. If a campaign needs different bytes at the same path,
+          StarVault asks before replacing them and explains that the
+          replacement becomes permanent after activation commits.
+        </li>
+        <li>
+          <strong>Optional save isolation Beta.</strong> Enabling it first backs
           up the selected profile. Save and profile settings stay locked while
           a custom campaign is active.
         </li>
         <li>
-          <strong>Quick-play.</strong> Play checks the current state, activates
-          the chosen campaign only when needed, and launches it.
-        </li>
-        <li>
-          <strong>Journaled switches.</strong> StarVault stages and verifies the
-          whole target, records each swap phase, and keeps backups until the
-          ledger commit verifies.
-        </li>
-        <li>
-          <strong>No dependency soup.</strong> Shared <code>.SC2Mod</code>
-          files are deduplicated. A different unowned file at a target path
-          blocks activation before a swap.
-        </li>
-        <li>
-          <strong>Migrates your old setup.</strong> Existing CCM campaigns
-          import through the same checked pipeline; originals stay untouched.
+          <strong>Import from SC2CCM.</strong> StarVault can copy campaigns from
+          an existing SC2CCM setup without changing the originals.
         </li>
         <li>
           <strong>Signed updates.</strong> Official releases publish a signed

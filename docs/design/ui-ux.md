@@ -15,6 +15,13 @@ and keeps Play available.
 Removing or reimporting the active package explains that the user must return
 to vanilla first.
 
+When activation or Play returns `external_mods_conflict`, Library offers a
+separate replacement action. The dialog explains that the original external
+file is available for rollback only until activation commits. A checkbox saves
+the automatic-replacement preference. Settings exposes the same preference
+even while a campaign is active because changing it does not mutate game
+files.
+
 ## Health and repair
 
 Library renders `Health.state` as ready, drifted, or recovery required. It

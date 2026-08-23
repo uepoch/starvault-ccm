@@ -22,7 +22,8 @@ Preflight checks:
 3. StarCraft II is not running;
 4. the active campaign and managed Mods match the ledger;
 5. save ownership matches the active package when isolation is enabled;
-6. the requested package manifest is readable and verified.
+6. the requested package manifest is readable and its referenced blob metadata
+   is valid.
 
 Play acquires the mutation lock before preflight. It activates the requested
 package only when it is not already active, then launches the game while still

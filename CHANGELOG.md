@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0] - 2026-08-24
+
+- Every faction now uses one synthetic `Maps\Campaign` tree and one junction.
+  Official maps stay in the game archives, and Return to vanilla restores the
+  exact loose override tree that existed before activation.
+- Activation reuses complete campaign deployments and no longer rereads every
+  package, map, and staged Mods file to compute hashes it already has.
+- A conflicting external Mods file is reported before target Mods are staged.
+  Library can replace it for one activation or remember the choice. Failed
+  activations restore the external file from the operation backup.
+- The importer accepts mirrored and nested map layouts while preserving useful
+  subdirectories beneath the selected faction root.
+- Public documentation now describes the single-campaign workflow, Mods
+  replacement behavior, performance checks, and current Windows support.
+
 ## [0.1.7] — 2026-08-23
 
 - Campaign activation is now global: zero or one custom campaign can be active,

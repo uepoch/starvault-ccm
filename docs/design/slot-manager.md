@@ -51,18 +51,24 @@ Activation runs in this order:
 
 1. refuse the operation while StarCraft II is running;
 2. recover or reject an existing journal;
-3. load and hash-verify the target manifest;
+3. load and validate the target manifest and referenced blob metadata;
 4. verify the current owned campaign files and managed Mods;
 5. write the `preparing` journal with every owned artifact path;
-6. stage the complete synthetic `Maps\Campaign` view and Mods trees;
-7. reject a different unowned file already present at a target Mods path;
-8. classify an identical unowned file as borrowed and advance the journal to
-   `prepared`;
-9. transition saves when isolation is enabled;
-10. swap the previous campaign-root object for the target;
-11. replace the managed Mods set;
-12. commit the active campaign and managed Mods rows;
-13. verify the result, delete backups, and clear the journal.
+6. reuse or stage the synthetic `Maps\Campaign` view;
+7. classify target Mods paths before copying the target Mods tree;
+8. classify an identical external file as borrowed, and reject a different
+   file unless the user allowed replacement;
+9. back up any external file approved for replacement, materialize target
+   Mods, and advance the journal to `prepared`;
+10. transition saves when isolation is enabled;
+11. swap the previous campaign-root object for the target;
+12. replace the managed Mods set;
+13. commit the active campaign and managed Mods rows;
+14. verify the result, delete backups, and clear the journal.
+
+Import hashes content before writing immutable store blobs. Activation checks
+blob type and size and reuses a complete campaign deployment when one exists.
+It does not reread every map to compute the same hashes again.
 
 Save, campaign, or Mods errors abort the operation. The workflow restores the
 previous state and returns the error. It does not log and continue.
@@ -77,6 +83,12 @@ Every deployed path has one disposition:
 Restore removes a created file only when its current hash still matches the
 ledger. It never removes a borrowed file. A changed managed file blocks the
 operation and remains on disk for inspection or repair.
+
+A different external file blocks activation by default. With explicit user
+permission, StarVault records and backs up that file, replaces it, and marks the
+campaign copy as created. A failed activation restores the external file. Once
+activation commits, the backup is discarded and Return to vanilla cannot
+restore it.
 
 File-to-directory and directory-to-file replacements use staging and backups.
 Filesystem code handles regular files, directories, symbolic links, and

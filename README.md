@@ -14,8 +14,8 @@ Library is the only campaign-management screen.
 - **Activate** deploys a package but does not launch the game.
 - **Play** runs preflight, activates the package if needed, then launches the
   game.
-- **Return to vanilla** restores the game before another active package can be
-  replaced or removed.
+- **Return to vanilla** removes the active deployment. You must do this before
+  reimporting or removing the active package.
 
 Every package ID has one current manifest and one current revision. Reimporting
 an inactive package replaces that manifest atomically. Metadata edits do not
@@ -24,10 +24,10 @@ until the user returns to vanilla.
 
 Activation, restore, and repair use a persistent operation journal. StarVault
 writes the journal before each filesystem swap and keeps staging trees and
-backups until the ledger commits and verification succeeds. On startup it
-rolls an uncommitted operation back to the previous campaign; a ledger-committed
-operation is verified and finalized. If it cannot prove either state, it
-preserves the recovery files and blocks further mutations.
+backups until the ledger commits and the resulting state passes its checks. On
+startup it rolls an uncommitted operation back to the previous campaign; a
+ledger-committed operation is verified and finalized. If it cannot prove either
+state, it preserves the recovery files and blocks further mutations.
 
 Campaign maps are exposed through one junction at `Maps\Campaign`, regardless
 of faction. StarVault builds a synthetic override tree, placing package maps at
@@ -40,6 +40,17 @@ StarVault also tracks files it manages in `Mods\`. A matching external file is
 borrowed and left in place on restore. A file created by StarVault is removed
 only while its hash still matches. Changed managed files stop the operation and
 remain available for Repair.
+
+If a campaign needs to replace a different external Mods file, StarVault asks
+first. The original is kept long enough to roll back a failed activation, then
+discarded after the activation commits. Return to vanilla removes the campaign
+file but cannot restore that original. Users who accept this behavior can turn
+on automatic replacement in Settings.
+
+Import hashes package content before it enters the immutable store. Activation
+reuses an existing campaign deployment and checks file metadata instead of
+rereading every map. Content hashes remain in use where StarVault must prove
+ownership before deleting a managed Mods file.
 
 ## Import and migration
 
@@ -76,13 +87,6 @@ made safe.
   User, package, and environment failures stay local. Reports exclude absolute
   paths, usernames, profile IDs, archive names, and temporary paths.
 - Full diagnostic chains stay in the local operation log.
-
-## Alpha reset
-
-The hardened store deliberately does not migrate the previous alpha schema.
-Follow the [fresh alpha reset procedure](docs/alpha-reset.md) before installing
-the first build that uses the single-campaign schema. Stop if restore or backup
-verification fails.
 
 ## Current limitations
 

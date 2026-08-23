@@ -20,6 +20,12 @@ SQLite ledger, and the pending-operation journal.
 Blobs are immutable. Package and config writes use a temporary file, flush the
 contents, then atomically rename it into place.
 
+Import computes each blob's SHA-256 before committing it. Activation validates
+the manifest plus each referenced blob's type and size, but does not hash the
+whole package again. This avoids rereading large packages whenever the user
+switches campaigns. Hash checks still protect ingestion, ownership decisions,
+rollback evidence, and deletion of managed Mods files.
+
 ## Package manifest
 
 Each package ID has one current `manifest.json`. The manifest records the
@@ -84,10 +90,3 @@ Archive analysis enforces these limits before commit:
 Extraction and ingestion run on blocking workers. Cancellation checks occur no
 more than 4 MiB apart, including within one large file. Each operation uses a
 unique scratch directory and removes it on every terminal state.
-
-## Unsupported old stores
-
-The fresh schema has no compatibility layer for the previous alpha store.
-Opening a legacy schema returns an unsupported-format error. Follow
-[`../alpha-reset.md`](../alpha-reset.md) instead of adding automatic
-conversion code.

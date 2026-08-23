@@ -146,8 +146,7 @@ struct CachedWorkflowHealth {
 }
 
 impl Store {
-    /// Open a fresh schema or an existing version 2 store. Legacy schemas are
-    /// rejected. Alpha reset is an operator action, not an in-product migration.
+    /// Open a fresh schema or an existing version 2 store.
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_import_reserve(root, ArchiveLimits::default().reserve_bytes)
     }
@@ -184,14 +183,6 @@ impl Store {
         ensure_or_create_real_directory(&packages, "package store")?;
         ensure_optional_real_directory(&root.join("blob-staging"), "blob staging")?;
         ensure_optional_real_directory(&root.join("deploy"), "deployment store")?;
-        if contains_legacy_package_layout(&packages)? {
-            return Err(user_path_err(
-                "unsupported_store_format",
-                "legacy revision directories are unsupported; complete the alpha reset before starting this build",
-                packages,
-                false,
-            ));
-        }
         let ledger = root.join("ledger.db");
         ensure_optional_real_file(&ledger, "store ledger")?;
         let conn = rusqlite::Connection::open_with_flags(
@@ -1698,9 +1689,7 @@ fn initialize_schema(conn: &rusqlite::Connection, ledger: &Path) -> Result<()> {
     if version != STORE_SCHEMA_VERSION {
         return Err(user_path_err(
             "unsupported_store_schema",
-            format!(
-                "store schema version {version} is unsupported; complete the alpha reset before starting this build"
-            ),
+            format!("store schema version {version} is unsupported"),
             ledger,
             false,
         ));
@@ -2016,52 +2005,6 @@ fn remove_validated_real_tree(path: &Path, label: &str) -> Result<()> {
     ensure_real_directory(path, label)?;
     std::fs::remove_dir(path)
         .map_err(|error| user_path_err("remove_store_directory", error.to_string(), path, false))
-}
-
-fn contains_legacy_package_layout(packages: &Path) -> Result<bool> {
-    for package in read_dir_sorted(packages)? {
-        let package_path = package.path();
-        let metadata = std::fs::symlink_metadata(&package_path).map_err(|error| {
-            user_path_err(
-                "inspect_package_directory",
-                error.to_string(),
-                &package_path,
-                false,
-            )
-        })?;
-        if !metadata.is_dir() || is_link(&metadata) {
-            continue;
-        }
-        let current_manifest = package_path.join(MANIFEST_FILE);
-        if matches!(
-            std::fs::symlink_metadata(&current_manifest),
-            Ok(metadata) if metadata.is_file() && !is_link(&metadata)
-        ) {
-            continue;
-        }
-        for child in read_dir_sorted(&package_path)? {
-            let child_path = child.path();
-            let child_metadata = std::fs::symlink_metadata(&child_path).map_err(|error| {
-                user_path_err(
-                    "inspect_package_directory",
-                    error.to_string(),
-                    &child_path,
-                    false,
-                )
-            })?;
-            if !child_metadata.is_dir() || is_link(&child_metadata) {
-                continue;
-            }
-            let manifest = child_path.join(MANIFEST_FILE);
-            if matches!(
-                std::fs::symlink_metadata(&manifest),
-                Ok(metadata) if metadata.is_file() && !is_link(&metadata)
-            ) {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }
 
 fn sync_directory(path: &Path) -> Result<()> {

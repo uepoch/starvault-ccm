@@ -47,11 +47,11 @@ preflight(package_id | current)
 initialize() / recover_pending()
 ```
 
-Activation verifies the target manifest and current game state before it
-writes the operation journal. It stages all target content before swapping
-saves, campaign files, or Mods. The ledger commit occurs only after those
-swaps succeed. Final verification occurs before backups and the journal are
-removed.
+Activation validates the target manifest, referenced blob metadata, and current
+game state before it writes the operation journal. It stages all target content
+before swapping saves, campaign files, or Mods. The ledger commit occurs only
+after those swaps succeed. Final state and filesystem-shape checks occur before
+backups and the journal are removed.
 
 Startup recovery reads the journal and the ledger before accepting mutations.
 If the ledger still names `previous_campaign`, the filesystem rolls back. If
