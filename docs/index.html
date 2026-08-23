@@ -176,10 +176,9 @@
           active and provides a clear Return to vanilla action.
         </li>
         <li>
-          <strong>Flexible imports.</strong> Import zip archives with packed or
-          unpacked maps and Mods. The importer handles common wrapper folders
+          <strong>Flexible imports.</strong>The importer handles common wrapper folders
           and nested game layouts, and shows the detected faction before it
-          writes the package.
+          writes the package. It also supports many more layout than the CCMv1.
         </li>
         <li>
           <strong>Separate Activate and Play actions.</strong> Activate prepares
@@ -187,28 +186,23 @@
           needed, then starts StarCraft II.
         </li>
         <li>
-          <strong>Recoverable switching.</strong> StarVault records each swap
-          phase and keeps its backups until the new state commits. If the app
-          stops midway, startup recovery finishes or rolls back the operation.
+          <strong>Recoverable switching.</strong> If any error occur during any step,
+          the folder is returned to a pristine state.
         </li>
         <li>
-          <strong>External Mods stay visible.</strong> Matching files are left
-          in place. If a campaign needs different bytes at the same path,
-          StarVault asks before replacing them and explains that the
-          replacement becomes permanent after activation commits.
+          <strong>Standalone Mod files stay usable.</strong> Matching files are left
+          in place. If an archive doesn't bundle a given mod, you can provide it manually.
         </li>
         <li>
-          <strong>Optional save isolation Beta.</strong> Enabling it first backs
-          up the selected profile. Save and profile settings stay locked while
-          a custom campaign is active.
+          <strong>Optional save isolation.</strong> Let's you separate your saves between
+          different mod without confusion and bookkeeping.
         </li>
         <li>
           <strong>Import from SC2CCM.</strong> StarVault can copy campaigns from
           an existing SC2CCM setup without changing the originals.
         </li>
         <li>
-          <strong>Signed updates.</strong> Official releases publish a signed
-          updater manifest only after tests and dependency audits pass.
+          <strong>Signed updates.</strong> Official releases are automatically installed.
         </li>
       </ul>
 
