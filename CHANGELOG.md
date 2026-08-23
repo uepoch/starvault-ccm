@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6] — 2026-08-23
+
+- Fixed imports of flat-layout packages (The Swarm Reborn and friends):
+  packed `.SC2Mod` files shipping next to the maps landed in the campaign
+  slot instead of the game's `Mods\` folder, so every map failed with a
+  missing-mod error. They now deploy where the game looks for them.
+
 ## [0.1.5] — 2026-08-23
 
 - Library table fills the window and scrolls itself with a sticky header,
