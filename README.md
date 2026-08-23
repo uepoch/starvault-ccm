@@ -33,6 +33,15 @@ treats a campaign switch as a transaction:
 
 ## Features
 
+![Library](docs/screenshots/library.png)
+
+The library lists every imported campaign with search, faction filter, and
+sortable columns.
+
+![Campaign select](docs/screenshots/campaign-select.png)
+
+Faction cards mirror the in-game campaign menu.
+
 - Import any community campaign zip — file dialog or drag-and-drop. Detected
   title, author, version, and faction are confirmed before anything lands;
   all fields are editable, and metadata stays editable later.
