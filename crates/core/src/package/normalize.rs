@@ -135,10 +135,17 @@ pub fn plan_from_extracted(root: &Path) -> Result<PackagePlan> {
                     rel_inside.to_string_lossy()
                 )
             }
-            None => {
-                let rel = file.strip_prefix(&wrapper).unwrap_or(file);
-                map_loose_path(rel)
-            }
+            None => match container_kind(file) {
+                // A packed MOD file follows the container contract even in a
+                // flat layout: maps reference it at `Mods\<name>` wherever
+                // the zip put it. Packed MAPS keep the loose-file rule —
+                // subfolders under the slot are load-bearing (evolution/…).
+                Some(false) => canonical_container_target(file, false, &wrapper),
+                _ => {
+                    let rel = file.strip_prefix(&wrapper).unwrap_or(file);
+                    map_loose_path(rel)
+                }
+            },
         };
 
         if let Some(existing) = seen_targets.get(&target) {

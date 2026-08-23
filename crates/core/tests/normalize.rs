@@ -189,6 +189,39 @@ fn loose_mod_outside_mods_uses_legacy_contract() {
 }
 
 #[test]
+fn packed_mod_in_flat_layout_ships_to_mods_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // Swarm-Reborn shape: packed .SC2Mod files and maps side by side at the
+    // zip root, no Mods/ folder at all. The mods must land at the Mods root
+    // (maps reference them as Mods\<name>); maps keep their subfolder.
+    make_tarcade_container(&root.join("zlab01.SC2Map"));
+    std::fs::create_dir_all(root.join("evolution")).unwrap();
+    std::fs::write(root.join("evolution/zchar01.SC2Map"), b"packed map").unwrap();
+    std::fs::copy(
+        fixture("RandomBuff.SC2Mod"),
+        root.join("crys_assets.SC2Mod"),
+    )
+    .unwrap();
+
+    let plan = plan_from_extracted(root).unwrap();
+    let targets: Vec<&str> = plan.files.iter().map(|f| f.target.as_str()).collect();
+    assert!(
+        targets.contains(&"mods/crys_assets.SC2Mod"),
+        "packed mod must ship to the Mods root: {targets:?}"
+    );
+    assert!(
+        targets.contains(&"slot/zlab01.SC2Map/DocumentInfo"),
+        "packed map keeps the loose rule: {targets:?}"
+    );
+    assert!(
+        targets.contains(&"slot/evolution/zchar01.SC2Map"),
+        "map subfolder is load-bearing: {targets:?}"
+    );
+}
+
+#[test]
 fn differing_collision_is_a_hard_error() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
