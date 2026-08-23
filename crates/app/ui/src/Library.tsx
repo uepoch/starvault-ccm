@@ -80,7 +80,7 @@ export default function Library({
         setEntries(e);
         setError(null);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errMessage(e)));
   };
 
   useEffect(refresh, []);
@@ -168,7 +168,7 @@ export default function Library({
       notifications.show({ color: "green", message: `${entry.id} removed.` });
       refresh();
     } catch (e) {
-      notifications.show({ color: "red", title: "Remove failed", message: String(e) });
+      notifications.show({ color: "red", title: "Remove failed", message: errMessage(e) });
     } finally {
       setBusyId(null);
     }

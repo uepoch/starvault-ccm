@@ -1,3 +1,4 @@
+import { errMessage } from "./errors";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Badge, Button, Group, Stack, Table, Text, Title } from "@mantine/core";
@@ -29,7 +30,7 @@ export default function Log() {
   const refresh = () =>
     invoke<LogEntry[]>("read_log", { limit: 500 })
       .then(setEntries)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errMessage(e)));
 
   useEffect(() => {
     void refresh();

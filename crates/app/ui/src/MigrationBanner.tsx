@@ -1,3 +1,4 @@
+import { errMessage } from "./errors";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Alert, Button, Group, Select, Stack, Text } from "@mantine/core";
@@ -40,7 +41,7 @@ export default function MigrationBanner({ onMigrated }: { onMigrated: () => void
       setDone((d) => [...d, candidate.path]);
       onMigrated();
     } catch (e) {
-      setError(String(e));
+      setError(errMessage(e));
     }
   };
 

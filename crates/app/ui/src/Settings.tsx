@@ -1,3 +1,4 @@
+import { errMessage } from "./errors";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
@@ -53,7 +54,9 @@ export default function Settings() {
         setSavesProfile(cfg.saves_profile);
         loadedRef.current = true;
       })
-      .catch((e) => notifications.show({ color: "red", title: "Load failed", message: String(e) }));
+      .catch((e) =>
+        notifications.show({ color: "red", title: "Load failed", message: errMessage(e) }),
+      );
   }, []);
 
   // Auto-save: debounced so typing a path doesn't fire per keystroke.
@@ -75,7 +78,7 @@ export default function Settings() {
         // Keep the typed value visible; the inline warning explains why it
         // is not persisted yet. Config still holds the last valid state.
         setStatus("error");
-        setErrorMsg(String(e));
+        setErrorMsg(errMessage(e));
       }
     }, 700);
     return () => clearTimeout(t);
@@ -264,7 +267,11 @@ export default function Settings() {
                   loadedRef.current = true;
                   notifications.show({ color: "green", message: "All data cleared." });
                 } catch (e) {
-                  notifications.show({ color: "red", title: "Clear failed", message: String(e) });
+                  notifications.show({
+                    color: "red",
+                    title: "Clear failed",
+                    message: errMessage(e),
+                  });
                   loadedRef.current = true;
                 }
               }}

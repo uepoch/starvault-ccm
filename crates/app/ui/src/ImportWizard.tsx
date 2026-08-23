@@ -127,7 +127,7 @@ export default function ImportWizard({
       setSlot(p.slot_guess === "unknown" ? "" : p.slot_guess);
       setStep(2);
     } catch (e) {
-      setError(String(e));
+      setError(errMessage(e));
     }
   };
 
@@ -156,7 +156,7 @@ export default function ImportWizard({
       }
       setStep(4);
     } catch (e) {
-      setError(String(e));
+      setError(errMessage(e));
       // Back to the confirm step: the ingest op is gone backend-side, so
       // staying on "Ingesting…" offers only a no-op cancel.
       setStep(2);

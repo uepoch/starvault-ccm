@@ -60,7 +60,7 @@ function LaunchControls({ onError }: { onError: (msg: string) => void }) {
       await invoke("reconcile");
       runPreflight();
     } catch (e) {
-      onError(String(e));
+      onError(errMessage(e));
     } finally {
       setRepairing(false);
     }
@@ -128,7 +128,7 @@ export default function Campaigns() {
   const refresh = () => {
     invoke<CampaignSlot[]>("list_campaigns")
       .then(setSlots)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errMessage(e)));
     invoke<LibraryEntry[]>("list_library")
       .then(setLibrary)
       .catch(() => {});
@@ -173,8 +173,8 @@ export default function Campaigns() {
       });
       refresh();
     } catch (e) {
-      setError(String(e));
-      notifications.show({ color: "red", title: "Restore failed", message: String(e) });
+      setError(errMessage(e));
+      notifications.show({ color: "red", title: "Restore failed", message: errMessage(e) });
     } finally {
       setBusy(null);
     }
