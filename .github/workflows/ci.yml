@@ -23,6 +23,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Test release manifest composition
+        shell: pwsh
+        run: ./scripts/test-compose-latest.ps1
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           shared-key: svccm-ci

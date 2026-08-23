@@ -13,7 +13,10 @@ the current commit to `main`, then dispatches the release workflow.
 The workflow keeps signing credentials in the final Windows job. That job
 cannot start until metadata, Rust, frontend, and dependency-audit jobs pass.
 `latest.json` is composed after the signed installer exists and is uploaded in
-the same final release step. A failed gate cannot publish an updater manifest.
+the same final release step. The composer renames the installer and signature
+to a fixed GitHub-safe filename, then uses that exact filename in the manifest.
+Its Windows regression test rejects a mismatch before the release build. A
+failed gate cannot publish an updater manifest.
 
 ## Dependency audit policy
 

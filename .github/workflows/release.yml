@@ -44,6 +44,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Test release manifest composition
+        shell: pwsh
+        run: ./scripts/test-compose-latest.ps1
       - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
         with:
           shared-key: svccm-release-gates
@@ -130,24 +133,10 @@ jobs:
         env:
           TAG: ${{ inputs.version }}
         run: |
-          $version = $env:TAG.TrimStart('v')
-          $nsis = Get-ChildItem "../../target/release/bundle/nsis/*.exe" | Select-Object -First 1
-          $sig = Get-ChildItem "../../target/release/bundle/nsis/*.exe.sig" | Select-Object -First 1
-          if (-not $nsis -or -not $sig) { throw "NSIS installer or signature missing" }
-          $sigContent = (Get-Content $sig.FullName -Raw).Trim()
-          $assetName = [System.Uri]::EscapeDataString($nsis.Name)
-          $manifest = @{
-            version = $version
-            notes = "See https://github.com/uepoch/starvault-ccm/releases/tag/$env:TAG"
-            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-            platforms = @{
-              "windows-x86_64" = @{
-                signature = $sigContent
-                url = "https://github.com/uepoch/starvault-ccm/releases/download/$env:TAG/$assetName"
-              }
-            }
-          }
-          $manifest | ConvertTo-Json -Depth 5 | Out-File -Encoding utf8NoBOM "../../target/release/bundle/latest.json"
+          & "../../scripts/compose-latest.ps1" `
+            -Tag $env:TAG `
+            -BundleDir "../../target/release/bundle/nsis" `
+            -OutputPath "../../target/release/bundle/latest.json"
 
       - name: Publish signed artifacts and updater manifest
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65

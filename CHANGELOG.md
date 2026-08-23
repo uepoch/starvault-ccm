@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Release packaging now gives the installer a fixed GitHub-safe filename and
+  verifies that `latest.json` names the uploaded file exactly.
+
 ## [0.2.0] - 2026-08-24
 
 - Every faction now uses one synthetic `Maps\Campaign` tree and one junction.
