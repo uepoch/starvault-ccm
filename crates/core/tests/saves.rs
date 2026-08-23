@@ -87,9 +87,18 @@ fn swap_isolates_saves_between_owners_round_trip() {
         &banks.join("2-S2-1-777/plain-bank.SC2Bank"),
         b"campaign-bank",
     );
+    // A vanilla-named bank left in live (e.g. cloud sync) must ride with
+    // plain, never with the displaced campaign.
+    touch(&banks.join("ZCampaignStats.SC2Bank"), b"vanilla");
 
     // Restore to plain: campaign saves archived, plain ones back.
     mgr.swap(SlotId::LotV, "plain", "kerrigan").unwrap();
+    assert!(store
+        .join("saves/lotv-plain/Banks/ZCampaignStats.SC2Bank")
+        .is_file());
+    assert!(!store
+        .join("saves/lotv-kerrigan/Banks/ZCampaignStats.SC2Bank")
+        .exists());
     assert!(live.join("VoidCampaignSave.SC2Save").is_file());
     assert!(live.join("Campaign/For the Swarm.SC2Save").is_file());
     assert!(!live.join("Campaign/Kerrigan Mission.SC2Save").exists());

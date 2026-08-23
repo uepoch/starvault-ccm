@@ -110,6 +110,25 @@ pub fn saves_dir(documents: &Path, profile_id: &str) -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
+/// The game's own campaign-progress banks, by fixed name (verified on a
+/// clean profile). Custom campaigns write banks under their own names;
+/// these ride with the plain set exactly like the fixed-name root saves,
+/// so a displaced campaign can never inherit vanilla progress from a
+/// dirty live state.
+const VANILLA_BANKS: [&str; 11] = [
+    "warchive",
+    "warmy",
+    "wcampaign",
+    "wstory",
+    "zarchive",
+    "zcampaignstats",
+    "parchive",
+    "pprologue",
+    "prologuearchive",
+    "epiloguearchive",
+    "sc2epilogue",
+];
+
 /// Swaps save-sets for one faction between owners ("plain" or a package id).
 pub struct SavesManager {
     /// The live `…\Accounts\<acct>\<profile>\Saves` directory.
@@ -240,14 +259,8 @@ impl SavesManager {
             move_entry(&file, &dest, false)?;
             moved += 1;
         }
-        // Banks ride with the set: campaign progress (the "continue"
-        // state) lives there for custom campaigns, and everything written
-        // while this owner was active belongs to it.
-        for dir in SWEPT_DIRS
-            .map(|d| self.live.join(d))
-            .into_iter()
-            .chain([self.banks.clone()])
-        {
+        // Swept dirs (in-mission saves, autosaves) ride with the owner.
+        for dir in SWEPT_DIRS.map(|d| self.live.join(d)) {
             if !dir.is_dir() {
                 continue;
             }
@@ -258,6 +271,33 @@ impl SavesManager {
             }
             move_entry(&dir, &dest, true)?;
             moved += 1;
+        }
+        // Banks ride with the owner's set, except the game's own campaign
+        // banks: those ride with plain (same rule as the root saves).
+        if self.banks.is_dir() {
+            let plain_banks = self.set_dir(slot, "plain").join("Banks");
+            for entry in std::fs::read_dir(&self.banks)? {
+                let entry = entry?;
+                let path = entry.path();
+                let name = entry.file_name();
+                let is_vanilla = path.is_file()
+                    && VANILLA_BANKS.iter().any(|b| {
+                        name.to_string_lossy().to_ascii_lowercase() == format!("{b}.sc2bank")
+                    });
+                let dest_root = if is_vanilla {
+                    plain_banks.clone()
+                } else {
+                    std::fs::create_dir_all(set_dir.join("Banks"))?;
+                    set_dir.join("Banks")
+                };
+                let dest = dest_root.join(&name);
+                if dest.symlink_metadata().is_ok() {
+                    std::fs::remove_dir_all(&dest)?;
+                }
+                std::fs::create_dir_all(&dest_root)?;
+                move_entry(&path, &dest, path.is_dir())?;
+                moved += 1;
+            }
         }
         Ok(moved)
     }
