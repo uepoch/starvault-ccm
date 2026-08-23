@@ -1,9 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.1] - 2026-08-24
 
 - Release packaging now gives the installer a fixed GitHub-safe filename and
   verifies that `latest.json` names the uploaded file exactly.
+- Slightly larger default window; the Imported column no longer collapses
+  below its date content.
 
 ## [0.2.0] - 2026-08-24
 
