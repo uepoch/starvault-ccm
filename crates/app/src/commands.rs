@@ -436,7 +436,11 @@ pub fn clear_all_data(
     *state.campaigns_cache.lock().expect("campaigns poisoned") = None;
     // Import operations point at extracted trees under the cache scratch
     // dir that we are about to delete; the map would hold dead entries.
-    state.import_ops.lock().expect("import ops poisoned").clear();
+    state
+        .import_ops
+        .lock()
+        .expect("import ops poisoned")
+        .clear();
     invalidate_library(&cache);
 
     let data_dir = app

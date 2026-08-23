@@ -105,7 +105,7 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 - ☑ C6 **MED** (ff44708) — charset-validated at the boundary — `op_id` joined into a filesystem path
   unvalidated (webview-supplied, csp null). Validate charset
   (ascii-alphanumeric + dash) before use.
-- ☐ C7 LOW — import_ops never pruned; clear_all_data leaves stale map
+- ☑ C7 LOW (9a4fab6) — import_ops never pruned; clear_all_data leaves stale map
   entries pointing at deleted scratch dirs.
 - ☐ C8 LOW — tracing spans on only 4 of 27 commands; add `#[tracing::
   instrument(skip_all)]` to remaining mutating/IO commands.
@@ -137,17 +137,17 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 - ☑ D6 LOW (4d1a58c) — deleted `analyzeRef` (ImportWizard.tsx:72,135); delete.
 - ☑ D7 LOW (4d1a58c) — data={SLOTS} Select hardcodes the four entries that
   factions.ts exports as `SLOTS`; use `data={SLOTS}`.
-- ☐ D8 LOW — ConfigDto and LibraryEntry interfaces duplicated across
+- ☑ D8 LOW (f8101c9) — ConfigDto and LibraryEntry interfaces duplicated across
   components (ConfigDto already drifted 3 vs 6 fields); consolidate in
   types.ts.
-- ☐ D9 LOW — 10 catch sites use `String(e)` instead of `errMessage(e)`;
+- ☑ D9 LOW (f5aab83) — 10 catch sites use `String(e)` instead of `errMessage(e)`;
   future catches on CommandError commands would render "[object Object]".
-- ☐ D10 LOW — activate flow copy-pasted three times (Library, Campaigns,
+- ☑ D10 LOW (b49945f) — activate flow copy-pasted three times (Library, Campaigns,
   ImportWizard); extract a `useActivate()` hook.
 - ☑ D11 LOW (4d1a58c) — catch + inline error refresh has no `.catch`; add one.
 - ☐ D12 LOW — Campaigns inline `<style>` injects a global rule per mount;
   move to stylesheet.
-- ☐ D13 LOW — keepMounted={false} resets Library search/sort on tab
+- ☑ D13 LOW (64d21e3) — keepMounted={false} resets Library search/sort on tab
   switch; acceptable if intentional, revisit.
 - ☑ D14 LOW (4d1a58c) — guarded: sanitized migration id can be empty; guard
   `!id` too.

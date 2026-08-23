@@ -147,11 +147,7 @@ impl<'a> SlotManager<'a> {
     /// point a directory junction at it. Re-materialized only when missing,
     /// so switching back to a known revision is instant.
     fn swap_junction(&self, slot: SlotId, manifest: &PackageManifest, backup: &Path) -> Result<()> {
-        let deployed =
-            self.store
-                .root()
-                .join("deploy")
-                .join(format!("{}-{}", slot.as_str(), manifest.rev));
+        let deployed = self.store.deploy_dir(slot.as_str(), &manifest.rev);
         if !deployed.exists() {
             self.store.materialize_slot(manifest, &deployed)?;
         }
