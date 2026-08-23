@@ -138,7 +138,8 @@ impl Store {
 
     /// Like [`Store::ingest`], reporting per-file progress. The callback
     /// runs before each file; returning `false` cancels at that boundary
-    /// and yields `Ok(None)` — partial blobs are orphans reclaimed by GC.
+    /// and yields `Ok(None)` — partial blobs are orphans reclaimed by the
+    /// sweep GC on the next package removal (`Store::gc`).
     #[tracing::instrument(skip_all, fields(pkg = id, slot = slot.as_str()))]
     pub fn ingest_with_progress(
         &self,
@@ -630,6 +631,12 @@ impl Store {
         }
 
         // Sweep GC: keep only blobs referenced by surviving manifests.
+        self.gc()
+    }
+
+    /// Sweep GC: remove blobs no surviving manifest references (cancelled
+    /// ingest orphans and displaced revisions), then drop empty shards.
+    pub fn gc(&self) -> Result<()> {
         let mut referenced = std::collections::BTreeSet::new();
         for manifest in self.all_manifests()? {
             for file in manifest.files {
