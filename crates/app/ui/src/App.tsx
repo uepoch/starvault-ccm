@@ -10,17 +10,12 @@ import ChangelogButton from "./ChangelogButton";
 import Library from "./Library";
 import Log from "./Log";
 import Settings from "./Settings";
+import type { ConfigDto } from "./types";
 
 const theme = createTheme({
   primaryColor: "blue",
   defaultRadius: "sm",
 });
-
-interface ConfigDto {
-  game_exe: string | null;
-  strategy_override: string | null;
-  crash_reports_opt_in: boolean;
-}
 
 export default function App() {
   const [tab, setTab] = useState<string | null>(null);

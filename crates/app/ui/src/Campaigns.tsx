@@ -4,6 +4,7 @@ import { notifications } from "@mantine/notifications";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
 import { FACTION_COLORS, FACTION_TITLES, FACTION_NAMES } from "./factions";
 import { errConflict, errMessage } from "./errors";
+import type { LibraryEntry } from "./types";
 import {
   Alert,
   Badge,
@@ -113,13 +114,6 @@ interface CampaignSlot {
   rev: string | null;
   author: string | null;
   version: string | null;
-}
-
-interface LibraryEntry {
-  id: string;
-  slot: string;
-  title: string | null;
-  author: string | null;
 }
 
 export default function Campaigns() {

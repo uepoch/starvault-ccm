@@ -42,18 +42,7 @@ import ImportWizard from "./ImportWizard";
 import MigrationBanner from "./MigrationBanner";
 import ConflictDialog, { type ConflictDialogState } from "./ConflictDialog";
 import { errConflict, errMessage } from "./errors";
-
-interface LibraryEntry {
-  id: string;
-  rev: string;
-  slot: string;
-  active_on: string[];
-  title: string | null;
-  author: string | null;
-  version: string | null;
-  desc: string | null;
-  imported_at: number | null;
-}
+import type { LibraryEntry } from "./types";
 
 const columnHelper = createColumnHelper<LibraryEntry>();
 

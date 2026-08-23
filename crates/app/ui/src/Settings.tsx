@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { notifications } from "@mantine/notifications";
+import type { ConfigDto, SavesStatus } from "./types";
 import {
   Anchor,
   Button,
@@ -17,23 +18,6 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-
-interface ConfigDto {
-  game_exe: string | null;
-  strategy_override: string | null;
-  crash_reports_opt_in: boolean;
-  log_level: string;
-  save_isolation: boolean;
-  saves_profile: string | null;
-}
-
-interface SavesStatus {
-  supported: boolean;
-  reason: string | null;
-  profiles: string[];
-  selected: string | null;
-  enabled: boolean;
-}
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
