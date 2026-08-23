@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.7] — 2026-08-23
+
+- Fixed campaigns leaving their shared mod files in the game's `Mods\`
+  after a restore or replace: the deployed union now shrinks with the
+  active set.
+- Fixed vanilla campaign progress leaking into custom-campaign save
+  sets: fixed-name saves and banks always ride with the plain set, so a
+  campaign can never offer a Continue state it did not earn.
+- Migration from an old SC2CCM install works again (detection pointed at
+  the wrong folder and never fired).
+- Re-imported campaigns: the newest revision (by import time) is picked,
+  not a random one.
+- Large campaigns activate in seconds again — the deployment ledger is
+  written in one transaction instead of one per file.
+- Launch: no flat 6-second wait when the game was never running; a clear
+  error if it is still running instead of hanging.
+- "Clear all data" no longer resurrects wiped settings; a failed ingest
+  returns to the confirm step instead of a dead Cancel button.
+- Saves on a Documents folder located on another drive are handled.
+- Every command failure now lands in the operation log and crash reports
+  carry the operation in flight (package, slot, archive).
+
 ## [0.1.6] — 2026-08-23
 
 - Fixed imports of flat-layout packages (The Swarm Reborn and friends):
