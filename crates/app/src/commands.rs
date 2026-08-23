@@ -79,9 +79,9 @@ fn legacy_roaming_dir(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_data_dir()
         .map_err(|e| format!("resolve app data dir: {e}"))?
-        // Roaming parent: `<base>/StarVault/CCM` → strip to `%APPDATA%`.
+        // The app identifier is one segment (`dev.starvault.ccm`), so a
+        // single parent step yields `%APPDATA%`.
         .parent()
-        .and_then(std::path::Path::parent)
         .map(std::path::Path::to_path_buf)
         .ok_or_else(|| "cannot resolve roaming profile dir".to_string())
 }
