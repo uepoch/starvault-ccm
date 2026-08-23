@@ -38,10 +38,13 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 
 ### B. Rust core (from reviewer + lens)
 
-- ☐ B1 **HIGH** — slots.rs:250/226/378, launch.rs:85 — `is_symlink()` is
-  false for NTFS junctions; `reconcile` never detects dangling junctions on
-  Windows (crash recovery dead on the only v1 platform). Fix: cfg(windows)
-  `FileTypeExt::is_symlink_dir` helper at the 3 sites + a Windows test.
+- ☐ B1 ~~**HIGH**~~ **REFUTED** — reviewer claimed `is_symlink()` is false
+  for NTFS junctions. Empirical evidence contradicts it: the Windows CI
+  test `junction_swap_points_at_deploy_tree_and_reads_through` asserts
+  `is_symlink() == true` on a live junction slot and has passed on every
+  release (Rust std classifies junction reparse points as symlinks).
+  The proposed `is_reparse_point()` "fix" would have also matched OneDrive
+  cloud placeholders — a regression. No change.
 - ☐ B2 **HIGH** — slots.rs:217-236 — `restore` never redeploys the mods
   union of remaining active slots: the restored package's `mods/**` stay in
   the game's `Mods\` forever (global namespace, stale mods keep loading).
@@ -87,14 +90,15 @@ One commit per point. Status: ☐ todo / ☑ done (commit).
 
 ### C. Tauri app layer
 
-- ☐ C1 **BLOCKER** — commands.rs:78-87 — `legacy_roaming_dir` strips two
+- ☑ C1 (f890b81) — commands.rs:78-87 — `legacy_roaming_dir` strips two
   parents; the app identifier is one segment (`dev.starvault.ccm`) so
   `detect_legacy_ccm` always returns None — migration detection is dead.
-  Fix: drop one `.parent()`, fix the comment.
-- ☐ C2 **HIGH** — commands.rs:692/1003/1131 — "latest revision" picked by
+  Fix: drop one `.parent()`, fix the comment. (Verified on the real
+  machine: `%APPDATA%\SC2CCM\SC2CCM.txt` exists and will now be found.)
+- ☑ C2 (fb547a6) — commands.rs:692/1003/1131 — "latest revision" picked by
   lexicographic hash order; with 2+ revisions activate/launch/reveal act on
   a stale revision. Fix: core helper `Store::latest_rev` (max by
-  `imported_at`), collapse the three duplicated blocks.
+  `imported_at`), collapses the three duplicated blocks.
 - ☐ C3 **MED** — campaigns_cache is write-only (dead cache); add the
   list_library-style read short-circuit or delete it.
 - ☐ C4 **MED** — telemetry.rs — `set_enabled(true)` re-runs `sentry::init`
