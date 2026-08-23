@@ -155,3 +155,105 @@ fn union_replaces_leftover_packed_mod_file_with_directory_form() {
     assert!(target.join("a.xml").is_file());
     assert!(target.join("b.xml").is_file());
 }
+
+/// Package fixture: a map under Maps/campaign plus mod containers under Mods.
+fn union_pkg(src: &Path, map: &str, mods: &[(&str, &[u8])]) {
+    map_container(&src.join("Maps/campaign").join(map));
+    for (name, content) in mods {
+        let dir = src.join("Mods").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("x.txt"), content).unwrap();
+    }
+}
+
+#[test]
+fn restore_and_replace_prune_orphaned_mods_files() {
+    // The game's Mods\ is a global namespace: restoring (or replacing) a
+    // package must remove its union files that no active package owns,
+    // keep files still owned by others, and prune emptied container dirs.
+    use svccm_core::layout::{GameLayout, SlotId, WindowsLayout};
+    use svccm_core::slots::SlotManager;
+    use svccm_core::store::Store;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let layout = WindowsLayout::new(tmp.path().join("sc2"));
+    std::fs::create_dir_all(layout.mods_dir()).unwrap();
+    std::fs::create_dir_all(layout.slot_dir(SlotId::LotV)).unwrap();
+    std::fs::create_dir_all(layout.slot_dir(SlotId::HotS)).unwrap();
+    let store = Store::open(tmp.path().join("store")).unwrap();
+    let manager = SlotManager::new(&layout, &store);
+    let mods = layout.mods_dir();
+
+    let src_a = tempfile::tempdir().unwrap();
+    union_pkg(
+        src_a.path(),
+        "aaa.SC2Map",
+        &[("Shared.SC2Mod", b"s"), ("OnlyA.SC2Mod", b"a")],
+    );
+    let rev_a = store
+        .ingest(
+            "aaa",
+            SlotId::LotV,
+            &plan_from_extracted(src_a.path()).unwrap(),
+        )
+        .unwrap();
+
+    let src_b = tempfile::tempdir().unwrap();
+    union_pkg(
+        src_b.path(),
+        "bbb.SC2Map",
+        &[("Shared.SC2Mod", b"s"), ("OnlyB.SC2Mod", b"b")],
+    );
+    let rev_b = store
+        .ingest(
+            "bbb",
+            SlotId::HotS,
+            &plan_from_extracted(src_b.path()).unwrap(),
+        )
+        .unwrap();
+
+    // A active: its files deploy.
+    manager.activate(SlotId::LotV, "aaa", &rev_a).unwrap();
+    assert!(mods.join("Shared.SC2Mod/x.txt").is_file());
+    assert!(mods.join("OnlyA.SC2Mod/x.txt").is_file());
+
+    // B joins: shared content coexists, both own files present.
+    manager.activate(SlotId::HotS, "bbb", &rev_b).unwrap();
+    assert!(mods.join("OnlyB.SC2Mod/x.txt").is_file());
+
+    // Restoring A removes OnlyA (and its emptied dir), keeps Shared (B owns it).
+    manager.restore(SlotId::LotV).unwrap();
+    assert!(!mods.join("OnlyA.SC2Mod/x.txt").exists());
+    assert!(!mods.join("OnlyA.SC2Mod").exists());
+    assert!(mods.join("Shared.SC2Mod/x.txt").is_file());
+
+    // Restoring B clears the last owner; the union shrinks to nothing.
+    manager.restore(SlotId::HotS).unwrap();
+    assert!(!mods.join("Shared.SC2Mod/x.txt").exists());
+
+    // Replacing a package prunes the displaced one's exclusive files too.
+    let src_c = tempfile::tempdir().unwrap();
+    union_pkg(src_c.path(), "ccc.SC2Map", &[("OnlyC.SC2Mod", b"c")]);
+    let rev_c = store
+        .ingest(
+            "ccc",
+            SlotId::LotV,
+            &plan_from_extracted(src_c.path()).unwrap(),
+        )
+        .unwrap();
+    manager.activate(SlotId::LotV, "ccc", &rev_c).unwrap();
+    assert!(mods.join("OnlyC.SC2Mod/x.txt").is_file());
+
+    let src_d = tempfile::tempdir().unwrap();
+    union_pkg(src_d.path(), "ddd.SC2Map", &[("OnlyD.SC2Mod", b"d")]);
+    let rev_d = store
+        .ingest(
+            "ddd",
+            SlotId::LotV,
+            &plan_from_extracted(src_d.path()).unwrap(),
+        )
+        .unwrap();
+    manager.activate(SlotId::LotV, "ddd", &rev_d).unwrap();
+    assert!(!mods.join("OnlyC.SC2Mod/x.txt").exists());
+    assert!(mods.join("OnlyD.SC2Mod/x.txt").is_file());
+}

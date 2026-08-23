@@ -92,6 +92,9 @@ impl<'a> SlotManager<'a> {
                             ),
                         )
                     })?;
+                // The displaced package's union files shrink away here.
+                self.store
+                    .prune_mods_union(&union, &self.layout.mods_dir())?;
                 cleanup_if_exists(&backup);
                 let _ = self.reclaim_leftovers(slot);
                 Ok(())
@@ -233,6 +236,16 @@ impl<'a> SlotManager<'a> {
             std::fs::create_dir_all(&slot_dir)?;
         }
         self.store.clear_active_slot(slot)?;
+        // The game's `Mods\` is a global namespace: the restored package's
+        // union files must shrink away, and what other actives own stays.
+        let mut remaining: Vec<PackageManifest> = Vec::new();
+        for (_, id, rev) in self.store.active_slots()? {
+            remaining.push(self.store.load_manifest(&id, &rev)?);
+        }
+        let refs: Vec<&PackageManifest> = remaining.iter().collect();
+        let (union, _) = self.store.plan_mods_union(&refs);
+        self.store
+            .prune_mods_union(&union, &self.layout.mods_dir())?;
         Ok(())
     }
 

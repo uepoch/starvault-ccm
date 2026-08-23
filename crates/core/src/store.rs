@@ -103,6 +103,9 @@ impl Store {
                  rev       TEXT NOT NULL,
                  PRIMARY KEY (game_path, rev)
              );
+             CREATE TABLE IF NOT EXISTS mods_union (
+                 path TEXT PRIMARY KEY
+             );
 ",
         )
         .map_err(|e| pkg_err(root.display().to_string(), format!("ledger init: {e}")))?;
@@ -392,6 +395,61 @@ impl Store {
             }
             let src = self.blob_path(&entry.file.sha256);
             copy_with_retry(&src, &target)?;
+        }
+        Ok(())
+    }
+
+    /// Remove files the previous deployed union owned but `union` does not,
+    /// and record `union` as the deployed set. `apply_mods_union` only ever
+    /// adds and overwrites; this is the shrinking half, so restoring or
+    /// replacing a package leaves nothing stale in the game's `Mods\`.
+    pub fn prune_mods_union(&self, union: &[ModsUnionEntry<'_>], mods_dir: &Path) -> Result<()> {
+        let conn = self.conn.lock().expect("ledger poisoned");
+        let mut stmt = conn
+            .prepare("SELECT path FROM mods_union")
+            .map_err(|e| pkg_err("ledger", e.to_string()))?;
+        let prev = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| pkg_err("ledger", e.to_string()))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| pkg_err("ledger", e.to_string()))?;
+        drop(stmt);
+
+        let current: std::collections::BTreeSet<String> =
+            union.iter().map(|e| e.rel_path.to_lowercase()).collect();
+        for path in prev {
+            if current.contains(&path.to_lowercase()) {
+                continue;
+            }
+            // Owned by no active package anymore. Removal races (AV locks,
+            // late writers) leave the row absent so the next sweep retries.
+            let target = mods_dir.join(&path);
+            if target.is_dir() {
+                let _ = std::fs::remove_dir_all(&target);
+            } else {
+                let _ = std::fs::remove_file(&target);
+            }
+            // An emptied container directory would still load as an (empty)
+            // mod; prune parents up to the Mods root.
+            let mut dir = target.parent();
+            while let Some(d) = dir {
+                if d == mods_dir || std::fs::remove_dir(d).is_err() {
+                    break;
+                }
+                dir = d.parent();
+            }
+        }
+
+        conn.execute("DELETE FROM mods_union", [])
+            .map_err(|e| pkg_err("ledger", e.to_string()))?;
+        if !union.is_empty() {
+            let mut stmt = conn
+                .prepare("INSERT OR REPLACE INTO mods_union(path) VALUES(?1)")
+                .map_err(|e| pkg_err("ledger", e.to_string()))?;
+            for e in union {
+                stmt.execute(rusqlite::params![e.rel_path])
+                    .map_err(|e| pkg_err("ledger", e.to_string()))?;
+            }
         }
         Ok(())
     }
