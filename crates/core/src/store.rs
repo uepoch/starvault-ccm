@@ -126,6 +126,13 @@ impl Store {
         &self.root
     }
 
+    /// Path of a revision's materialized deploy tree (the junction target
+    /// strategy; also what reveal opens). Naming lives here, not at the
+    /// call sites.
+    pub fn deploy_dir(&self, slot: &str, rev: &str) -> PathBuf {
+        self.root.join("deploy").join(format!("{slot}-{rev}"))
+    }
+
     /// Ingest a normalization plan as package `id` targeting `slot`.
     ///
     /// Copies every planned file into the blob store (deduplicated by
@@ -407,7 +414,7 @@ impl Store {
     /// adds and overwrites; this is the shrinking half, so restoring or
     /// replacing a package leaves nothing stale in the game's `Mods\`.
     pub fn prune_mods_union(&self, union: &[ModsUnionEntry<'_>], mods_dir: &Path) -> Result<()> {
-        let conn = self.conn.lock().expect("ledger poisoned");
+        let mut conn = self.conn.lock().expect("ledger poisoned");
         let mut stmt = conn
             .prepare("SELECT path FROM mods_union")
             .map_err(|e| pkg_err("ledger", e.to_string()))?;
@@ -443,10 +450,15 @@ impl Store {
             }
         }
 
-        conn.execute("DELETE FROM mods_union", [])
+        // One transaction for the whole rewrite: per-statement commits meant
+        // one fsync + journal cycle per union file (3000+ on big campaigns).
+        let tx = conn
+            .transaction()
+            .map_err(|e| pkg_err("ledger", e.to_string()))?;
+        tx.execute("DELETE FROM mods_union", [])
             .map_err(|e| pkg_err("ledger", e.to_string()))?;
         if !union.is_empty() {
-            let mut stmt = conn
+            let mut stmt = tx
                 .prepare("INSERT OR REPLACE INTO mods_union(path) VALUES(?1)")
                 .map_err(|e| pkg_err("ledger", e.to_string()))?;
             for e in union {
@@ -454,6 +466,7 @@ impl Store {
                     .map_err(|e| pkg_err("ledger", e.to_string()))?;
             }
         }
+        tx.commit().map_err(|e| pkg_err("ledger", e.to_string()))?;
         Ok(())
     }
 
