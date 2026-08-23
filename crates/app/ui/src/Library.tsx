@@ -324,7 +324,7 @@ export default function Library({
   }, [factionFilter]);
 
   return (
-    <Stack p="lg" gap="lg">
+    <Stack p="lg" gap="lg" h="calc(100vh - 50px)">
       <Group justify="space-between">
         <Title order={2}>Library</Title>
         <ImportWizard
@@ -384,9 +384,16 @@ export default function Library({
       )}
 
       {table.getRowModel().rows.length > 0 && (
-        <Card withBorder p={0}>
+        <Card withBorder p={0} flex={1} style={{ overflowY: "auto", minHeight: 0 }}>
           <Table highlightOnHover verticalSpacing="sm">
-            <Table.Thead>
+            <Table.Thead
+              style={{
+                position: "sticky",
+                top: 0,
+                zIndex: 1,
+                background: "var(--mantine-color-body)",
+              }}
+            >
               {table.getHeaderGroups().map((hg) => (
                 <Table.Tr key={hg.id}>
                   {hg.headers.map((header) => (
