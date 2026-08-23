@@ -162,6 +162,7 @@ impl SavesManager {
     /// Make `new_owner`'s set live for `slot`, sweeping the current live
     /// content into `prev_owner`'s set first. Idempotent; live content
     /// always wins over the set copy. Returns repair notes.
+    #[tracing::instrument(skip_all, fields(slot = slot.as_str(), new_owner, prev_owner))]
     pub fn swap(&self, slot: SlotId, new_owner: &str, prev_owner: &str) -> Result<Vec<String>> {
         let mut notes = Vec::new();
         std::fs::create_dir_all(&self.live)?;
@@ -264,6 +265,7 @@ impl SavesManager {
     }
 
     /// Delete a package's save sets (called on package removal).
+    #[tracing::instrument(skip_all, fields(pkg = package))]
     pub fn remove_sets(&self, package: &str) -> usize {
         let mut removed = 0;
         for slot in SlotId::ALL {

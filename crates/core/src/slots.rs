@@ -110,6 +110,7 @@ impl<'a> SlotManager<'a> {
     }
 
     #[tracing::instrument(skip_all, fields(pkg = manifest.id))]
+    #[tracing::instrument(skip_all, fields(slot = slot.as_str(), rev = manifest.rev))]
     fn swap(&self, slot: SlotId, manifest: &PackageManifest, backup: &Path) -> Result<()> {
         if self.wants_junction(slot) {
             match self.swap_junction(slot, manifest, backup) {
@@ -252,6 +253,7 @@ impl<'a> SlotManager<'a> {
     /// Startup reconciliation (design §crash recovery): remove dangling
     /// links, reclaim stale staging dirs, restore backups newer than the
     /// ledger. Returns human-readable repair notes for the log screen.
+    #[tracing::instrument(skip_all)]
     pub fn reconcile(&self) -> Result<Vec<String>> {
         let mut report = Vec::new();
         for slot in SlotId::ALL {

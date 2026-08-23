@@ -223,6 +223,7 @@ impl Store {
     /// Edit a package's user-facing metadata (title/version/description)
     /// across all of its revisions. Metadata is excluded from the content
     /// hash, so revision ids stay stable. Empty strings clear a field.
+    #[tracing::instrument(skip_all, fields(pkg = id))]
     pub fn set_metadata(
         &self,
         id: &str,
@@ -586,6 +587,7 @@ impl Store {
     /// Remove an installed package entirely: manifests, deploy trees, and
     /// any blobs no other package references. Refuses while the package is
     /// active on a slot — restore first.
+    #[tracing::instrument(skip_all, fields(pkg = id))]
     pub fn remove_package(&self, id: &str) -> Result<()> {
         let active = self.active_slots()?;
         if let Some((slot, _, _)) = active.iter().find(|(_, pkg, _)| pkg == id) {
