@@ -244,7 +244,9 @@ pub async fn save_config(
         replace_external_mods: extras
             .replace_external_mods
             .unwrap_or(previous.replace_external_mods),
-        analytics_enabled: extras.analytics_enabled.unwrap_or(previous.analytics_enabled),
+        analytics_enabled: extras
+            .analytics_enabled
+            .unwrap_or(previous.analytics_enabled),
         analytics_acknowledged: previous.analytics_acknowledged,
     };
     if target.save_isolation && target.saves_profile.is_none() {

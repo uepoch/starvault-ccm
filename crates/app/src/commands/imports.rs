@@ -632,10 +632,7 @@ pub async fn import_ingest(
                     crate::analytics::track(
                         &app,
                         "package_installed",
-                        &[
-                            ("package", log_id.clone()),
-                            ("slot", slot.clone()),
-                        ],
+                        &[("package", log_id.clone()), ("slot", slot.clone())],
                     );
                     Ok(snapshot)
                 }

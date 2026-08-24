@@ -7,21 +7,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tauri::AppHandle;
-use tauri_plugin_aptabase::{EventTracker, InitOptions};
+use tauri_plugin_aptabase::EventTracker;
 
-/// Public app key - a routing identifier, not a credential.
+/// Public app key - a routing identifier, not a credential. The EU region
+/// host is derived from the key (A-EU-...) by the plugin itself.
 const KEY: &str = "A-EU-3510622030";
-const HOST: &str = "https://eu.appinsights.aptabase.com";
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
 pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    tauri_plugin_aptabase::Builder::new(KEY)
-        .with_options(InitOptions {
-            host: Some(HOST.into()),
-            ..Default::default()
-        })
-        .build()
+    tauri_plugin_aptabase::Builder::new(KEY).build()
 }
 
 pub fn set_enabled(enabled: bool) {
