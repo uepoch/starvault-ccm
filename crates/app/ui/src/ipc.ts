@@ -34,6 +34,7 @@ export interface SaveConfigInput {
   saveIsolation: boolean;
   savesProfile: string | null;
   replaceExternalMods: boolean;
+  analyticsEnabled: boolean;
 }
 
 export const saveConfig = (input: SaveConfigInput) =>
@@ -46,8 +47,12 @@ export const saveConfig = (input: SaveConfigInput) =>
       saveIsolation: input.saveIsolation,
       savesProfile: input.savesProfile ?? "",
       replaceExternalMods: input.replaceExternalMods,
+      analyticsEnabled: input.analyticsEnabled,
     },
   });
+
+export const setAnalytics = (enabled: boolean, acknowledged: boolean) =>
+  invoke<void>("set_analytics", { enabled, acknowledged });
 
 export const clearAllData = () => invoke<void>("clear_all_data");
 export const revealPackage = (id: string) => invoke<string>("reveal_package", { id });

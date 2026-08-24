@@ -34,6 +34,7 @@ export default function Settings() {
   const [gameExe, setGameExe] = useState("");
   const [strategy, setStrategy] = useState<string | null>("auto");
   const [crashReports, setCrashReports] = useState(false);
+  const [analytics, setAnalytics] = useState(true);
   const [logLevel, setLogLevel] = useState("info");
   const [saveIsolation, setSaveIsolation] = useState(false);
   const [savesProfile, setSavesProfile] = useState<string | null>(null);
@@ -61,6 +62,7 @@ export default function Settings() {
       setGameExe(config.game_exe ?? "");
       setStrategy(config.strategy_override ?? "auto");
       setCrashReports(config.crash_reports_opt_in);
+      setAnalytics(config.analytics_enabled);
       setLogLevel(config.log_level ?? "info");
       setSaveIsolation(config.save_isolation);
       setSavesProfile(config.saves_profile);
@@ -97,6 +99,7 @@ export default function Settings() {
             gameExe: gameExe === "" ? null : gameExe,
             strategyOverride: strategy === "auto" ? null : strategy,
             crashReportsOptIn: crashReports,
+            analyticsEnabled: analytics,
             logLevel,
             saveIsolation,
             savesProfile,
@@ -119,7 +122,16 @@ export default function Settings() {
         autosaveTimerRef.current = null;
       }
     };
-  }, [gameExe, strategy, crashReports, logLevel, saveIsolation, savesProfile, replaceExternalMods]);
+  }, [
+    gameExe,
+    strategy,
+    crashReports,
+    analytics,
+    logLevel,
+    saveIsolation,
+    savesProfile,
+    replaceExternalMods,
+  ]);
 
   const quiesceAutosave = useCallback(async () => {
     loadedRef.current = false;
@@ -218,9 +230,15 @@ export default function Settings() {
               </Stack>
               <Switch
                 label="Crash reports"
-                description="Opt-in. Sends internal failures only; no analytics exist."
+                description="Opt-in. Sends internal failures only."
                 checked={crashReports}
                 onChange={(event) => setCrashReports(event.currentTarget.checked)}
+              />
+              <Switch
+                label="Anonymous usage statistics"
+                description="Opt-out. Counts app starts and which campaigns are installed or activated. Nothing identifying leaves this machine; disable any time."
+                checked={analytics}
+                onChange={(event) => setAnalytics(event.currentTarget.checked)}
               />
             </Stack>
           </Card>

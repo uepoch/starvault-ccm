@@ -4,6 +4,7 @@
 //! Public failures use the stable `CommandError` contract while full diagnostic
 //! chains remain in the local operation log.
 
+mod analytics;
 mod commands;
 mod telemetry;
 
@@ -59,6 +60,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(analytics::plugin())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -72,6 +74,11 @@ pub fn run() {
             // obvious when diagnosing reports.
             commands::log_startup(app.handle());
             telemetry::init(app.handle());
+            let state = app.state::<commands::AppState>();
+            if let Ok(config) = commands::load_config(&state) {
+                analytics::set_enabled(config.analytics_enabled);
+                analytics::track(app.handle(), "app_started", &[]);
+            }
             spawn_update_check(app.handle().clone());
             Ok(())
         })
@@ -87,6 +94,7 @@ pub fn run() {
             commands::imports::import_cancel,
             commands::settings::get_config,
             commands::settings::save_config,
+            commands::settings::set_analytics,
             commands::workflow::clear_all_data,
             commands::log::clear_log,
             commands::log::read_log,

@@ -5,10 +5,13 @@ import {
   Box,
   Button,
   Center,
+  Group,
   Loader,
   MantineProvider,
+  Modal,
   Stack,
   Tabs,
+  Text,
   createTheme,
 } from "@mantine/core";
 import { Notifications, notifications } from "@mantine/notifications";
@@ -16,7 +19,7 @@ import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import ChangelogButton from "./ChangelogButton";
 import { toCommandError } from "./errors";
-import { discoverGameExe, getConfig, initialize, saveConfig } from "./ipc";
+import { discoverGameExe, getConfig, initialize, saveConfig, setAnalytics } from "./ipc";
 import Library from "./Library";
 import Log from "./Log";
 import Settings from "./Settings";
@@ -32,6 +35,17 @@ function AppShell() {
   const [pendingZip, setPendingZip] = useState<string | null>(null);
   const [startup, setStartup] = useState<StartupReport | null>(null);
   const [startupError, setStartupError] = useState<CommandError | null>(null);
+  const [analyticsPrompt, setAnalyticsPrompt] = useState(false);
+
+  const closeAnalyticsPrompt = async (enabled: boolean) => {
+    setAnalyticsPrompt(false);
+    try {
+      await setAnalytics(enabled, true);
+    } catch {
+      // The disclaimer must never block startup; Settings still offers
+      // the toggle.
+    }
+  };
 
   const beginInitialization = useCallback(async () => {
     setStartupError(null);
@@ -45,6 +59,7 @@ function AppShell() {
 
     try {
       const config = await getConfig();
+      if (!config.analytics_acknowledged) setAnalyticsPrompt(true);
       if (config.game_exe) return;
       const found = await discoverGameExe();
       if (!found) return;
@@ -56,6 +71,7 @@ function AppShell() {
         saveIsolation: config.save_isolation,
         savesProfile: config.saves_profile,
         replaceExternalMods: config.replace_external_mods,
+        analyticsEnabled: config.analytics_enabled,
       });
     } catch {
       // Install discovery is a convenience. Settings remains available when
@@ -111,32 +127,60 @@ function AppShell() {
   }
 
   return (
-    <Tabs value={tab} onChange={setTab} keepMounted={false}>
-      <Tabs.List px="lg" pt="sm">
-        <Tabs.Tab value="library">Library</Tabs.Tab>
-        <Tabs.Tab value="log">Log</Tabs.Tab>
-        <Tabs.Tab value="settings">Settings</Tabs.Tab>
-        <Box ml="auto">
-          <ChangelogButton />
-        </Box>
-      </Tabs.List>
+    <>
+      <Tabs value={tab} onChange={setTab} keepMounted={false}>
+        <Tabs.List px="lg" pt="sm">
+          <Tabs.Tab value="library">Library</Tabs.Tab>
+          <Tabs.Tab value="log">Log</Tabs.Tab>
+          <Tabs.Tab value="settings">Settings</Tabs.Tab>
+          <Box ml="auto">
+            <ChangelogButton />
+          </Box>
+        </Tabs.List>
 
-      {startup.notes.length > 0 && (
-        <Alert color={startup.recovery_performed ? "yellow" : "blue"} mx="lg" mt="sm">
-          {startup.notes.join(" ")}
-        </Alert>
-      )}
+        {startup.notes.length > 0 && (
+          <Alert color={startup.recovery_performed ? "yellow" : "blue"} mx="lg" mt="sm">
+            {startup.notes.join(" ")}
+          </Alert>
+        )}
 
-      <Tabs.Panel value="library">
-        <Library pendingZip={pendingZip} onZipConsumed={() => setPendingZip(null)} />
-      </Tabs.Panel>
-      <Tabs.Panel value="log">
-        <Log />
-      </Tabs.Panel>
-      <Tabs.Panel value="settings">
-        <Settings />
-      </Tabs.Panel>
-    </Tabs>
+        <Tabs.Panel value="library">
+          <Library pendingZip={pendingZip} onZipConsumed={() => setPendingZip(null)} />
+        </Tabs.Panel>
+        <Tabs.Panel value="log">
+          <Log />
+        </Tabs.Panel>
+        <Tabs.Panel value="settings">
+          <Settings />
+        </Tabs.Panel>
+      </Tabs>
+
+      <Modal
+        opened={analyticsPrompt}
+        onClose={() => void closeAnalyticsPrompt(true)}
+        title="Anonymous usage statistics"
+        size="md"
+        withCloseButton={false}
+        closeOnClickOutside={false}
+      >
+        <Stack gap="sm">
+          <Text size="sm">
+            StarVault counts app starts and which campaigns are installed or activated, so
+            development focuses on what people actually play. Events carry no personal data: no
+            account, no save contents, no file paths beyond the campaign identifier.
+          </Text>
+          <Text size="sm" c="dimmed">
+            You can disable this any time in Settings.
+          </Text>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => void closeAnalyticsPrompt(false)}>
+              Disable
+            </Button>
+            <Button onClick={() => void closeAnalyticsPrompt(true)}>That's fine</Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </>
   );
 }
 

@@ -4,6 +4,8 @@ export interface ConfigDto {
   game_exe: string | null;
   strategy_override: string | null;
   crash_reports_opt_in: boolean;
+  analytics_enabled: boolean;
+  analytics_acknowledged: boolean;
   log_level: string;
   save_isolation: boolean;
   saves_profile: string | null;

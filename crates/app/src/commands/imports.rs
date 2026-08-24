@@ -629,6 +629,14 @@ pub async fn import_ingest(
                             &format!("{}@{}", log_id, short(revision)),
                         );
                     }
+                    crate::analytics::track(
+                        &app,
+                        "package_installed",
+                        &[
+                            ("package", log_id.clone()),
+                            ("slot", slot.clone()),
+                        ],
+                    );
                     Ok(snapshot)
                 }
                 Err(error) => Err(super::error::report(&app, &state, "import_ingest", error)),

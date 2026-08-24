@@ -83,6 +83,11 @@ pub async fn activate_package(
         "activate",
         &format!("{}@{}", active.id, short(&active.revision)),
     );
+    crate::analytics::track(
+        &app,
+        "package_activated",
+        &[("package", active.id.to_string())],
+    );
     Ok(())
 }
 
@@ -124,6 +129,11 @@ pub async fn play_package(
         "info",
         "play",
         &format!("{}@{}", active.id, short(&active.revision)),
+    );
+    crate::analytics::track(
+        &app,
+        "package_activated",
+        &[("package", active.id.to_string())],
     );
     Ok(())
 }

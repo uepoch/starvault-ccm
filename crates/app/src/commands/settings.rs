@@ -16,6 +16,8 @@ pub struct ConfigDto {
     pub game_exe: Option<String>,
     pub strategy_override: Option<String>,
     pub crash_reports_opt_in: bool,
+    pub analytics_enabled: bool,
+    pub analytics_acknowledged: bool,
     pub log_level: String,
     pub save_isolation: bool,
     pub saves_profile: Option<String>,
@@ -33,6 +35,8 @@ impl From<Config> for ConfigDto {
                 StrategyChoice::Copy => "copy".into(),
             }),
             crash_reports_opt_in: config.crash_reports_opt_in,
+            analytics_enabled: config.analytics_enabled,
+            analytics_acknowledged: config.analytics_acknowledged,
             log_level: config.log_level,
             save_isolation: config.save_isolation,
             saves_profile: config
@@ -49,6 +53,7 @@ pub struct ConfigExtras {
     pub save_isolation: Option<bool>,
     pub saves_profile: Option<String>,
     pub replace_external_mods: Option<bool>,
+    pub analytics_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +244,8 @@ pub async fn save_config(
         replace_external_mods: extras
             .replace_external_mods
             .unwrap_or(previous.replace_external_mods),
+        analytics_enabled: extras.analytics_enabled.unwrap_or(previous.analytics_enabled),
+        analytics_acknowledged: previous.analytics_acknowledged,
     };
     if target.save_isolation && target.saves_profile.is_none() {
         return Err(super::error::report(
@@ -333,8 +340,32 @@ pub async fn save_config(
     })
     .await?;
     state.telemetry.set_enabled(target.crash_reports_opt_in);
+    crate::analytics::set_enabled(target.analytics_enabled);
     super::log::set_log_level(&target.log_level);
     super::log::log_op(&app, "info", "config", "settings saved");
+    Ok(())
+}
+
+/// Acknowledge the first-launch analytics disclaimer and/or flip the
+/// opt-out. The only write path the disclaimer itself uses.
+#[tauri::command]
+pub async fn set_analytics(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    enabled: bool,
+    acknowledged: bool,
+) -> CommandResult<()> {
+    let config_path = state.config_path.clone();
+    let _mutation = state.mutation.lock().await;
+    let mut config = super::error::map(&app, &state, "set_analytics", super::load_config(&state))?;
+    config.analytics_enabled = enabled;
+    config.analytics_acknowledged = acknowledged;
+    let persisted = config.clone();
+    super::error::blocking(&app, &state, "set_analytics", move || {
+        persisted.save(&config_path)
+    })
+    .await?;
+    crate::analytics::set_enabled(enabled);
     Ok(())
 }
 

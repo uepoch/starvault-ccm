@@ -19,8 +19,12 @@ pub struct Config {
     pub game_exe: Option<std::path::PathBuf>,
     /// Slot switching strategy override; None = auto (junction-first).
     pub strategy_override: Option<StrategyChoice>,
-    /// Opt-in crash reporting only (decision S3). No analytics exist.
+    /// Opt-in crash reporting only (decision S3).
     pub crash_reports_opt_in: bool,
+    /// Opt-out anonymized usage analytics (Aptabase, EU).
+    pub analytics_enabled: bool,
+    /// The first-launch analytics disclaimer has been acknowledged.
+    pub analytics_acknowledged: bool,
     /// Minimum operation-log level recorded: `info`, `warn`, or `error`.
     pub log_level: String,
     /// Experimental: isolate campaign saves per active package.
@@ -37,6 +41,8 @@ impl Default for Config {
             game_exe: None,
             strategy_override: None,
             crash_reports_opt_in: false,
+            analytics_enabled: true,
+            analytics_acknowledged: false,
             log_level: "info".into(),
             save_isolation: false,
             saves_profile: None,
