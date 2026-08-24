@@ -8,7 +8,6 @@ use svccm_core::config::StrategyChoice;
 use svccm_core::contracts::HealthState;
 use svccm_core::identity::PackageId;
 use svccm_core::layout::{SlotId, WindowsLayout};
-use svccm_core::operation::PendingOperation;
 use svccm_core::package::normalize::plan_from_extracted;
 use svccm_core::slots::SlotManager;
 use svccm_core::store::Store;
