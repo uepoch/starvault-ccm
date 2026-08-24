@@ -84,7 +84,7 @@ fn exclusive_locked_staged_mod_rolls_back_a_partially_applied_switch() {
         .unwrap();
 
     let error = switch.apply().unwrap_err();
-    assert_eq!(error.code(), "open_staged_mod");
+    assert_eq!(error.code(), "commit_mods_container");
     assert!(!mods_root.join("AlphaA.SC2Mod").exists());
     assert!(!mods_root.join("OmegaA.SC2Mod").exists());
     assert_eq!(
