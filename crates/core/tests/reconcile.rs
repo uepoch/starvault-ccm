@@ -53,9 +53,7 @@ fn slot_rollback_can_resume_from_journal_paths_and_manifest_evidence() {
 
     rollback_paths_checked(&paths, None, Some(&manifest)).unwrap();
     assert!(layout.slot_dir(SlotId::LotV).symlink_metadata().is_err());
-    assert!(paths
-        .iter()
-        .all(|paths| !paths.staging.exists() && !paths.backup.exists()));
+    assert!(!paths.paths.staging.exists() && !paths.paths.backup.exists());
 }
 
 #[cfg(any(unix, windows))]
@@ -77,12 +75,12 @@ fn wol_rollback_rejects_a_linked_backup_before_external_mutation() {
     let paths = transition.journal_paths();
     transition.apply().unwrap();
 
-    std::fs::remove_dir_all(&paths[0].backup).unwrap();
+    std::fs::remove_dir_all(&paths.paths.backup).unwrap();
     let external = temp.path().join("external-backup");
     let sentinel = external.join("sentinel.txt");
     std::fs::create_dir_all(&external).unwrap();
     std::fs::write(&sentinel, b"outside").unwrap();
-    create_directory_link(&external, &paths[0].backup);
+    create_directory_link(&external, &paths.paths.backup);
 
     let error = rollback_paths_checked(&paths, None, Some(&manifest)).unwrap_err();
     assert_eq!(error.code(), "slot_drift");

@@ -10,6 +10,7 @@ pub mod atomic_file;
 pub mod config;
 pub mod contracts;
 pub mod error;
+pub mod filesystem;
 pub mod identity;
 pub mod launch;
 pub mod layout;

@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::filesystem::is_link_or_reparse as is_link_or_reparse_point;
 use serde::{Deserialize, Serialize};
 
 /// Campaigns-directory siblings owned by the game's own campaign slots —
@@ -184,19 +185,6 @@ fn validate_real_directory_metadata(
         path,
         false,
     ))
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 /// Best-effort install discovery (design §install discovery): registry

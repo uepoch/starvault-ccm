@@ -478,7 +478,7 @@ fn deployment_never_reuses_or_deletes_a_user_file_named_like_an_old_temporary() 
 }
 
 #[test]
-fn changed_managed_mod_blocks_transition_and_is_never_deleted() {
+fn changed_created_mod_is_discarded_on_restore_and_rollback_safe() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::open_for_tests(temp.path().join("store")).unwrap();
     let source = temp.path().join("source");
@@ -491,9 +491,11 @@ fn changed_managed_mod_blocks_transition_and_is_never_deleted() {
     let managed = mods_root.join("Owned.SC2Mod");
     std::fs::write(&managed, b"user changed this").unwrap();
 
-    let error = PreparedModsTransition::prepare(&store, &mods_root, &rows, None, "owned-restore")
-        .unwrap_err();
-    assert_eq!(error.code(), "managed_file_changed");
+    let transition =
+        PreparedModsTransition::prepare(&store, &mods_root, &rows, None, "owned-restore").unwrap();
+    transition.apply().unwrap();
+    assert!(!managed.exists());
+    transition.rollback().unwrap();
     assert_eq!(std::fs::read(managed).unwrap(), b"user changed this");
 }
 

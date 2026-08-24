@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::contracts::{ActiveCampaign, Health};
 use crate::error::{internal_err, package_err, pkg_err, user_err, user_path_err, Result};
+use crate::filesystem::is_link_or_reparse as is_link;
 use crate::identity::PackageId;
 use crate::layout::SlotId;
 use crate::package::import::{
@@ -1853,19 +1854,6 @@ fn reject_package_case_alias(packages: &Path, id: &PackageId) -> Result<()> {
         }
     }
     Ok(())
-}
-
-#[cfg(windows)]
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 fn read_dir_sorted(path: &Path) -> Result<Vec<std::fs::DirEntry>> {

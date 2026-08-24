@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::contracts::{Health, HealthIssue, HealthState, LibrarySnapshot};
 use crate::error::Result;
+use crate::filesystem::is_link_or_reparse as is_link_or_reparse_point;
 use crate::identity::PackageId;
 use crate::layout::SlotId;
 use crate::layout::WindowsLayout;
@@ -35,7 +36,6 @@ pub fn scan(store: &Store) -> Result<LibrarySnapshot> {
             code: corrupt.code.clone(),
             message: corrupt.message.clone(),
             path: Some(corrupt.manifest_path.display().to_string()),
-            repairable: false,
         })
         .collect();
     let entries: Vec<LibraryEntry> = inventory
@@ -65,10 +65,6 @@ pub fn scan(store: &Store) -> Result<LibrarySnapshot> {
             code: "active_campaign_manifest_missing".into(),
             message: "The active campaign does not match an installed package manifest".into(),
             path: None,
-            // Repair needs the active manifest as its trusted source. If the
-            // manifest is missing or mismatched, only operator recovery can
-            // establish which content should be deployed.
-            repairable: false,
         });
         HealthState::RecoveryRequired
     } else if issues.is_empty() {
@@ -223,17 +219,4 @@ fn valid_operation_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }

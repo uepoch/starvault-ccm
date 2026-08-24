@@ -38,7 +38,7 @@ import {
   type ColumnFiltersState,
   type SortingState,
 } from "@tanstack/react-table";
-import { REPAIRABLE_ERROR_CODES, toCommandError } from "./errors";
+import { toCommandError } from "./errors";
 import { FACTION_COLORS, FACTION_NAMES, FACTION_TITLES, SLOTS } from "./factions";
 import ImportWizard from "./ImportWizard";
 import {
@@ -47,7 +47,6 @@ import {
   listLibrary,
   playPackage,
   removePackage,
-  repairActive,
   restoreVanilla,
   revealPackage,
 } from "./ipc";
@@ -238,20 +237,6 @@ export default function Library({
     }
   };
 
-  const repair = async () => {
-    setPageBusy("repair");
-    setOperationError(null);
-    try {
-      await repairActive();
-      notifications.show({ color: "green", message: "The active campaign was repaired." });
-      await refresh();
-    } catch (error) {
-      setOperationError(toCommandError(error));
-    } finally {
-      setPageBusy(null);
-    }
-  };
-
   const reveal = async (entry: LibraryEntry) => {
     try {
       await revealPackage(entry.id);
@@ -408,9 +393,6 @@ export default function Library({
     setColumnFilters(factionFilter ? [{ id: "faction", value: factionFilter }] : []);
   }, [factionFilter]);
 
-  const healthRepairable = snapshot?.health.issues.some((issue) => issue.repairable) ?? false;
-  const errorRepairable = operationError ? REPAIRABLE_ERROR_CODES.has(operationError.code) : false;
-
   return (
     <Stack p="lg" gap="lg" h="calc(100vh - 50px)">
       <Group justify="space-between">
@@ -491,17 +473,10 @@ export default function Library({
                 {issue.message}
               </Text>
             ))}
-            {healthRepairable && (
-              <Button
-                size="xs"
-                variant="light"
-                color="yellow"
-                w="fit-content"
-                loading={pageBusy === "repair"}
-                onClick={repair}
-              >
-                Repair active campaign
-              </Button>
+            {active && snapshot.health.state === "drifted" && (
+              <Text size="sm">
+                Return to vanilla to discard the active deployment before retrying.
+              </Text>
             )}
           </Stack>
         </Alert>
@@ -520,21 +495,7 @@ export default function Library({
           withCloseButton
           onClose={() => setOperationError(null)}
         >
-          <Stack gap="xs">
-            <Text size="sm">{operationError.message}</Text>
-            {errorRepairable && (
-              <Button
-                size="xs"
-                variant="light"
-                color="red"
-                w="fit-content"
-                loading={pageBusy === "repair"}
-                onClick={repair}
-              >
-                Repair active campaign
-              </Button>
-            )}
-          </Stack>
+          <Text size="sm">{operationError.message}</Text>
         </Alert>
       )}
 

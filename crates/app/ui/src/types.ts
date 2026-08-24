@@ -37,7 +37,6 @@ export interface HealthIssue {
   code: string;
   message: string;
   path?: string;
-  repairable: boolean;
 }
 
 export interface Health {

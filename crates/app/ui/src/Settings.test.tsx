@@ -90,7 +90,6 @@ describe("Settings", () => {
           {
             code: "interrupted_operation",
             message: "An interrupted operation must be recovered.",
-            repairable: false,
           },
         ],
       },

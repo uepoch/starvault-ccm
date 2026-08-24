@@ -135,9 +135,9 @@ fn cross_faction_switch_has_one_path_and_rolls_back_exactly() {
         .prepare(Some(&alpha), Some(&beta), "alpha-to-beta")
         .unwrap();
     let journal = transition.journal_paths();
-    assert_eq!(journal.len(), 1);
-    assert_eq!(journal[0].live, layout.campaign_dir());
-    assert!(journal[0]
+    assert_eq!(journal.paths.live, layout.campaign_dir());
+    assert!(journal
+        .paths
         .staging
         .join("nova/beta.SC2Map/payload.bin")
         .is_file());
@@ -187,7 +187,7 @@ fn rollback_refuses_a_changed_live_target_and_preserves_the_backup() {
         std::fs::read(layout.campaign_dir().join("unknown")).unwrap(),
         b"preserve"
     );
-    assert!(journal[0].backup.symlink_metadata().is_ok());
+    assert!(journal.paths.backup.symlink_metadata().is_ok());
 }
 
 #[test]

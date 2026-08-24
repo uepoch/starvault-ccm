@@ -13,7 +13,6 @@
   },
   "dependencies": {
     "@mantine/core": "^9.5.1",
-    "@mantine/hooks": "^9.5.1",
     "@mantine/notifications": "^9.5.1",
     "@tabler/icons-react": "^3.46.0",
     "@tanstack/react-table": "^8.21.3",

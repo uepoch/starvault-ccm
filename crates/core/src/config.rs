@@ -8,6 +8,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{pkg_err, Result};
+use crate::filesystem::is_link_or_reparse;
 use crate::identity::ProfileId;
 
 /// User settings persisted across runs. Defaults are sensible; every field
@@ -68,7 +69,7 @@ impl Config {
             }
             Err(error) => return Err(pkg_err(path.display().to_string(), error.to_string())),
         };
-        if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+        if !metadata.is_file() || is_link_or_reparse(&metadata) {
             return Err(pkg_err(
                 path.display().to_string(),
                 "configuration path must be a regular file",
@@ -89,19 +90,6 @@ impl Config {
             .map_err(|e| pkg_err(path.display().to_string(), e.to_string()))?;
         crate::atomic_file::write(path, text.as_bytes())
     }
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 #[cfg(test)]

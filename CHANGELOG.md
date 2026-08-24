@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.3] - 2026-08-24
+
+- Return to vanilla now discards changed files created by StarVault while
+  preserving borrowed external Mods. The separate Repair action is gone.
+- Campaign recovery now stores the single campaign slot directly instead of
+  carrying a one-element collection through every operation.
+- Shared filesystem primitives replace duplicate link, operation-path, and
+  Windows file-identity implementations. Dead UI and core dependencies were
+  removed in the same simplification pass.
+
 ## [0.2.2] - 2026-08-24
 
 - Large loose Mods now activate by renaming complete staged `.SC2Mod`

@@ -88,7 +88,6 @@ pub fn run() {
             commands::workflow::activate_package,
             commands::workflow::play_package,
             commands::workflow::restore_vanilla,
-            commands::workflow::repair_active,
             commands::imports::import_analyze,
             commands::imports::import_ingest,
             commands::imports::import_cancel,

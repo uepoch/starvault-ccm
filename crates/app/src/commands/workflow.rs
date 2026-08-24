@@ -159,23 +159,6 @@ pub async fn restore_vanilla(
 }
 
 #[tauri::command]
-pub async fn repair_active(app: AppHandle, state: tauri::State<'_, AppState>) -> CommandResult<()> {
-    let _mutation = state.mutation.lock().await;
-    let context = super::error::map(
-        &app,
-        &state,
-        "repair_active",
-        WorkflowContext::configured(&app, &state),
-    )?;
-    super::error::blocking(&app, &state, "repair_active", move || {
-        context.workflow().repair_active()
-    })
-    .await?;
-    super::log::log_op(&app, "info", "repair", "repaired active campaign");
-    Ok(())
-}
-
-#[tauri::command]
 pub async fn clear_all_data(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
@@ -374,7 +357,7 @@ fn validate_owned_tree(root: &Path) -> svccm_core::error::Result<()> {
                     true,
                 )
             })?;
-            if metadata.file_type().is_symlink() || super::is_reparse_point(&metadata) {
+            if svccm_core::filesystem::is_link_or_reparse(&metadata) {
                 return Err(svccm_core::error::user_path_err(
                     "unsafe_clear_target",
                     "refusing to clear application data containing a link or junction",

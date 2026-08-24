@@ -15,10 +15,10 @@ import {
   Textarea,
   TextInput,
 } from "@mantine/core";
-import { isRepairableError, toCommandError } from "./errors";
+import { toCommandError } from "./errors";
 import { FACTION_COLORS, SLOTS } from "./factions";
 import { importReducer, initialImportState } from "./importState";
-import { activatePackage, importApi, repairActive, type ImportProgressEvent } from "./ipc";
+import { activatePackage, importApi, type ImportProgressEvent } from "./ipc";
 import type { CommandError } from "./types";
 
 interface ImportWizardProps {
@@ -260,16 +260,6 @@ export default function ImportWizard({
     }
   };
 
-  const repairActivation = async () => {
-    try {
-      await repairActive();
-      setActionError(null);
-      await onImported();
-    } catch (error) {
-      setActionError(toCommandError(error));
-    }
-  };
-
   const replaceExisting = knownIds.has(id);
   const replacingActive = replaceExisting && activePackageId === id;
   const activeStep =
@@ -486,20 +476,7 @@ export default function ImportWizard({
               </Alert>
               {actionError && (
                 <Alert color="red" title="Activation failed">
-                  <Stack gap="xs">
-                    <Text size="sm">{actionError.message}</Text>
-                    {isRepairableError(actionError) && (
-                      <Button
-                        size="xs"
-                        variant="light"
-                        color="red"
-                        w="fit-content"
-                        onClick={repairActivation}
-                      >
-                        Repair active campaign
-                      </Button>
-                    )}
-                  </Stack>
+                  <Text size="sm">{actionError.message}</Text>
                 </Alert>
               )}
               {importedId && (

@@ -149,7 +149,7 @@ fn activation_and_restore_preserve_the_plain_override_tree() {
 }
 
 #[test]
-fn dangling_owned_root_junction_repairs_to_a_verified_copy() {
+fn dangling_owned_root_junction_can_be_restored() {
     let temp = tempfile::tempdir().unwrap();
     let layout = WindowsLayout::new(temp.path().join("sc2"));
     std::fs::create_dir_all(layout.root()).unwrap();
@@ -174,28 +174,6 @@ fn dangling_owned_root_junction_repairs_to_a_verified_copy() {
     let health = workflow().health();
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues[0].code, "slot_drift");
-    assert!(health.issues[0].repairable);
-    assert_eq!(
-        workflow().restore_vanilla().unwrap_err().code(),
-        "slot_drift"
-    );
-    assert!(PendingOperation::load(store.root()).unwrap().is_none());
-
-    workflow().repair_active().unwrap();
-    assert!(!std::fs::symlink_metadata(layout.campaign_dir())
-        .unwrap()
-        .file_type()
-        .is_symlink());
-    assert_eq!(
-        std::fs::read(
-            layout
-                .campaign_dir()
-                .join("void/tarcade.SC2Map/payload.txt")
-        )
-        .unwrap(),
-        b"tarcade"
-    );
-
     workflow().restore_vanilla().unwrap();
     assert!(store.active_campaign().unwrap().is_none());
 }

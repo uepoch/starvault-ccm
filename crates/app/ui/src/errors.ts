@@ -1,11 +1,5 @@
 import type { CommandError } from "./types";
 
-export const REPAIRABLE_ERROR_CODES = new Set([
-  "managed_file_changed",
-  "slot_drift",
-  "active_campaign_drifted",
-]);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -51,8 +45,4 @@ export function toCommandError(value: unknown): CommandError {
 
 export function errMessage(value: unknown): string {
   return toCommandError(value).message;
-}
-
-export function isRepairableError(value: unknown): boolean {
-  return REPAIRABLE_ERROR_CODES.has(toCommandError(value).code);
 }

@@ -14,7 +14,6 @@ use tauri::{AppHandle, Emitter};
 
 use super::{ensure_game_stopped, AppState, CommandResult};
 
-const MAX_OPERATION_ID_BYTES: usize = 96;
 const CANCELLATION_WAIT_ATTEMPTS: usize = 200;
 const CANCELLATION_WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
 
@@ -43,12 +42,7 @@ pub struct ConfirmedMeta {
 }
 
 fn validate_operation_id(operation_id: &str) -> svccm_core::error::Result<()> {
-    if operation_id.is_empty()
-        || operation_id.len() > MAX_OPERATION_ID_BYTES
-        || !operation_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
+    if !svccm_core::filesystem::is_safe_operation_id(operation_id) {
         return Err(svccm_core::error::user_err(
             "invalid_import_operation_id",
             "import operation id must be a bounded ASCII token",
@@ -89,7 +83,7 @@ fn emit_progress(
 }
 
 fn is_regular_archive_source(metadata: &std::fs::Metadata) -> bool {
-    !super::is_reparse_point(metadata)
+    !svccm_core::filesystem::is_link_or_reparse(metadata)
         && metadata.file_type().is_file()
         && !metadata.file_type().is_symlink()
 }
@@ -110,8 +104,7 @@ fn cleanup_scratch(path: &Path) -> svccm_core::error::Result<()> {
             ));
         }
     };
-    if metadata.file_type().is_symlink() || super::is_reparse_point(&metadata) || !metadata.is_dir()
-    {
+    if svccm_core::filesystem::is_link_or_reparse(&metadata) || !metadata.is_dir() {
         return Err(svccm_core::error::user_path_err(
             "unsafe_import_scratch",
             "refusing to remove a linked or non-directory import scratch path",
@@ -153,7 +146,7 @@ fn validate_scratch_tree(root: &Path) -> svccm_core::error::Result<()> {
                     true,
                 )
             })?;
-            if metadata.file_type().is_symlink() || super::is_reparse_point(&metadata) {
+            if svccm_core::filesystem::is_link_or_reparse(&metadata) {
                 return Err(svccm_core::error::user_path_err(
                     "unsafe_import_scratch",
                     "refusing to remove import scratch data containing a link or junction",
@@ -236,7 +229,7 @@ fn validate_existing_import_ancestors(path: &Path) -> svccm_core::error::Result<
             Ok(metadata)
                 if metadata.is_dir()
                     && !metadata.file_type().is_symlink()
-                    && !super::is_reparse_point(&metadata) => {}
+                    && !svccm_core::filesystem::is_link_or_reparse(&metadata) => {}
             Ok(_) => {
                 return Err(svccm_core::error::user_path_err(
                     "unsafe_import_root",
@@ -906,7 +899,7 @@ mod tests {
                 "accepted {invalid}"
             );
         }
-        assert!(validate_operation_id(&"a".repeat(MAX_OPERATION_ID_BYTES + 1)).is_err());
+        assert!(validate_operation_id(&"a".repeat(97)).is_err());
     }
 
     #[test]
@@ -1183,7 +1176,7 @@ mod tests {
         junction::create(&target, &junction_path).unwrap();
 
         let metadata = std::fs::symlink_metadata(&junction_path).unwrap();
-        assert!(super::super::is_reparse_point(&metadata));
+        assert!(svccm_core::filesystem::is_link_or_reparse(&metadata));
         assert!(!is_regular_archive_source(&metadata));
     }
 }

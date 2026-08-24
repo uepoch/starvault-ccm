@@ -172,7 +172,7 @@ fn session_health_reuses_startup_and_committed_verification() {
 }
 
 #[test]
-fn active_health_marks_an_unexpected_campaign_file_as_repairable_drift() {
+fn active_health_reports_unexpected_campaign_file_drift() {
     let fixture = Fixture::new();
     fixture.workflow().activate(&fixture.first).unwrap();
     let rogue = fixture
@@ -186,7 +186,6 @@ fn active_health_marks_an_unexpected_campaign_file_as_repairable_drift() {
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues.len(), 1);
     assert_eq!(health.issues[0].code, "slot_drift");
-    assert!(health.issues[0].repairable);
     assert_eq!(std::fs::read(rogue).unwrap(), b"rogue");
 }
 
@@ -384,7 +383,7 @@ fn unresolved_required_save_isolation_blocks_transitions_before_journaling() {
 }
 
 #[test]
-fn explicit_repair_replaces_changed_created_files() {
+fn restore_discards_changed_created_files() {
     let fixture = Fixture::new();
     fixture.workflow().activate(&fixture.first).unwrap();
     let slot_file = fixture
@@ -396,14 +395,15 @@ fn explicit_repair_replaces_changed_created_files() {
     std::fs::write(&mod_file, b"mod drift").unwrap();
     assert_eq!(fixture.workflow().health().state, HealthState::Drifted);
 
-    fixture.workflow().repair_active().unwrap();
-    assert_eq!(std::fs::read(slot_file).unwrap(), b"first");
-    assert_eq!(std::fs::read(mod_file).unwrap(), b"first");
+    fixture.workflow().restore_vanilla().unwrap();
+    assert!(!slot_file.exists());
+    assert!(!mod_file.exists());
+    assert!(fixture.store.active_campaign().unwrap().is_none());
     assert_eq!(fixture.workflow().health().state, HealthState::Ready);
 }
 
 #[test]
-fn interrupted_repair_recovers_to_original_drift_or_verified_target() {
+fn interrupted_drifted_restore_recovers_to_original_or_vanilla() {
     for point in [
         FailurePoint::Preparing,
         FailurePoint::SavesPrepared,
@@ -429,7 +429,7 @@ fn interrupted_repair_recovers_to_original_drift_or_verified_target() {
         let error = fixture
             .workflow()
             .with_fail_after(point)
-            .repair_active()
+            .restore_vanilla()
             .unwrap_err();
         assert_eq!(error.code(), "simulated_interruption", "{point:?}");
         fixture.workflow().recover_pending().unwrap();
@@ -437,39 +437,23 @@ fn interrupted_repair_recovers_to_original_drift_or_verified_target() {
             .unwrap()
             .is_none());
 
-        let repaired = matches!(
+        let restored = matches!(
             point,
-            FailurePoint::ModsSwapped
-                | FailurePoint::LedgerCommittedBeforeJournal
-                | FailurePoint::LedgerCommitted
+            FailurePoint::LedgerCommittedBeforeJournal | FailurePoint::LedgerCommitted
         );
-        assert_eq!(
-            std::fs::read(&slot_file).unwrap(),
-            if repaired {
-                b"first".as_slice()
-            } else {
-                b"slot drift".as_slice()
-            },
-            "{point:?}"
-        );
-        assert_eq!(
-            std::fs::read(&mod_file).unwrap(),
-            if repaired {
-                b"first".as_slice()
-            } else {
-                b"mod drift".as_slice()
-            },
-            "{point:?}"
-        );
-        assert_eq!(
-            fixture.workflow().health().state,
-            if repaired {
-                HealthState::Ready
-            } else {
-                HealthState::Drifted
-            },
-            "{point:?}"
-        );
+        if restored {
+            assert!(!slot_file.exists(), "{point:?}");
+            assert!(!mod_file.exists(), "{point:?}");
+            assert!(fixture.store.active_campaign().unwrap().is_none());
+        } else {
+            assert_eq!(
+                std::fs::read(&slot_file).unwrap(),
+                b"slot drift",
+                "{point:?}"
+            );
+            assert_eq!(std::fs::read(&mod_file).unwrap(), b"mod drift", "{point:?}");
+            assert!(fixture.store.active_campaign().unwrap().is_some());
+        }
     }
 }
 
@@ -669,7 +653,15 @@ fn recovery_never_deletes_a_slot_changed_after_interruption() {
         std::fs::read(&live).unwrap(),
         b"changed while app was closed"
     );
-    assert!(journal.paths.slots[0].backup.symlink_metadata().is_ok());
+    assert!(journal
+        .paths
+        .slot
+        .as_ref()
+        .unwrap()
+        .paths
+        .backup
+        .symlink_metadata()
+        .is_ok());
     assert!(PendingOperation::load(fixture.store.root())
         .unwrap()
         .is_some());
@@ -912,7 +904,7 @@ fn incomplete_managed_mods_ledger_blocks_restore_without_deleting_mods() {
 }
 
 #[test]
-fn vanilla_managed_mod_rows_are_nonrepairable_orphaned_state() {
+fn vanilla_managed_mod_rows_are_orphaned_state() {
     let fixture = Fixture::new();
     let connection = rusqlite::Connection::open(fixture.store.root().join("ledger.db")).unwrap();
     connection
@@ -927,7 +919,6 @@ fn vanilla_managed_mod_rows_are_nonrepairable_orphaned_state() {
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues.len(), 1);
     assert_eq!(health.issues[0].code, "orphaned_managed_mods");
-    assert!(!health.issues[0].repairable);
 
     let error = fixture.workflow().restore_vanilla().unwrap_err();
     assert_eq!(error.code(), "orphaned_managed_mods");
@@ -962,7 +953,6 @@ fn active_manifest_replacement_is_not_hidden_by_the_store_cache() {
     let health = fixture.workflow().health();
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues[0].code, "active_campaign_manifest_mismatch");
-    assert!(!health.issues[0].repairable);
 
     let error = fixture.workflow().restore_vanilla().unwrap_err();
     assert_eq!(error.code(), "active_campaign_manifest_mismatch");
@@ -992,7 +982,10 @@ fn recovery_rejects_incomplete_slot_state_bindings_before_mutation() {
     let path = PendingOperation::path(fixture.store.root());
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    value["paths"]["slots"]["previous_states"] = serde_json::Value::Array(Vec::new());
+    value["paths"]["slot"]
+        .as_object_mut()
+        .unwrap()
+        .remove("previous_state");
     std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
 
     let error = fixture.workflow().recover_pending().unwrap_err();
@@ -1010,7 +1003,7 @@ fn recovery_rejects_incomplete_slot_state_bindings_before_mutation() {
 
 #[cfg(unix)]
 #[test]
-fn active_external_slot_link_is_nonrepairable_and_never_followed() {
+fn active_external_slot_link_is_never_followed() {
     use std::os::unix::fs::symlink;
 
     let fixture = Fixture::new();
@@ -1023,7 +1016,6 @@ fn active_external_slot_link_is_nonrepairable_and_never_followed() {
     let health = fixture.workflow().health();
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues[0].code, "unowned_campaign_slot_link");
-    assert!(!health.issues[0].repairable);
     let error = fixture.workflow().restore_vanilla().unwrap_err();
     assert_eq!(error.code(), "unowned_campaign_slot_link");
     assert_eq!(
@@ -1041,7 +1033,7 @@ fn active_external_slot_link_is_nonrepairable_and_never_followed() {
 
 #[cfg(unix)]
 #[test]
-fn dangling_owned_slot_link_is_repaired_to_a_verified_copy_before_restore() {
+fn dangling_owned_slot_link_can_be_restored() {
     use std::os::unix::fs::symlink;
 
     let fixture = Fixture::new();
@@ -1063,22 +1055,6 @@ fn dangling_owned_slot_link_is_repaired_to_a_verified_copy_before_restore() {
     let health = fixture.workflow().health();
     assert_eq!(health.state, HealthState::Drifted);
     assert_eq!(health.issues[0].code, "slot_drift");
-    assert!(health.issues[0].repairable);
-    let error = fixture.workflow().restore_vanilla().unwrap_err();
-    assert_eq!(error.code(), "slot_drift");
-    assert!(live.symlink_metadata().unwrap().file_type().is_symlink());
-    assert!(PendingOperation::load(fixture.store.root())
-        .unwrap()
-        .is_none());
-
-    fixture.workflow().repair_active().unwrap();
-    assert!(!live.symlink_metadata().unwrap().file_type().is_symlink());
-    assert_eq!(
-        std::fs::read(live.join("void/first.SC2Map/payload")).unwrap(),
-        b"first"
-    );
-    assert_eq!(fixture.workflow().health().state, HealthState::Ready);
-
     fixture.workflow().restore_vanilla().unwrap();
     assert!(fixture.store.active_campaign().unwrap().is_none());
     assert!(std::fs::read_dir(&live).unwrap().next().is_none());
@@ -1130,7 +1106,7 @@ fn recovery_rejects_a_copy_to_link_backup_substitution_before_mods_rollback() {
     let journal = PendingOperation::load(fixture.store.root())
         .unwrap()
         .unwrap();
-    let previous_slot = &journal.paths.slots[0];
+    let previous_slot = &journal.paths.slot.as_ref().unwrap().paths;
     let external = fixture._temp.path().join("substituted-previous-slot");
     std::fs::rename(&previous_slot.backup, &external).unwrap();
     symlink(&external, &previous_slot.backup).unwrap();
@@ -1165,10 +1141,9 @@ fn committed_recovery_rejects_loss_of_the_preserved_plain_tree() {
     let journal = PendingOperation::load(fixture.store.root())
         .unwrap()
         .unwrap();
-    for slot in &journal.paths.slots {
-        if slot.backup.symlink_metadata().is_ok() {
-            std::fs::remove_dir_all(&slot.backup).unwrap();
-        }
+    let slot = &journal.paths.slot.as_ref().unwrap().paths;
+    if slot.backup.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(&slot.backup).unwrap();
     }
     let error = fixture.workflow().recover_pending().unwrap_err();
 
@@ -1194,7 +1169,7 @@ fn committed_cleanup_rejects_a_same_path_slot_backup_substitution_before_any_del
     let journal = PendingOperation::load(fixture.store.root())
         .unwrap()
         .unwrap();
-    let slot_backup = journal.paths.slots[0].backup.clone();
+    let slot_backup = journal.paths.slot.as_ref().unwrap().paths.backup.clone();
     let mods_backup = journal.paths.mods_backup.clone().unwrap();
     let mods_staging = journal.paths.mods_staging.clone().unwrap();
     std::fs::remove_dir_all(&slot_backup).unwrap();
@@ -1265,7 +1240,15 @@ fn direct_committed_cleanup_globally_preflights_before_deleting_slot_artifacts()
         b"preserve me"
     );
     assert!(backup.is_dir());
-    assert!(journal.paths.slots[0].backup.symlink_metadata().is_ok());
+    assert!(journal
+        .paths
+        .slot
+        .as_ref()
+        .unwrap()
+        .paths
+        .backup
+        .symlink_metadata()
+        .is_ok());
     assert!(!fixture.layout.plain_campaign_dir().exists());
     assert_eq!(
         fixture.store.active_campaign().unwrap().unwrap().id,

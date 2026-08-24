@@ -20,7 +20,6 @@ vi.mock("./ipc", () => ({
     ingest: vi.fn(),
     cancel: vi.fn(),
   },
-  repairActive: vi.fn(),
 }));
 
 describe("ImportWizard", () => {

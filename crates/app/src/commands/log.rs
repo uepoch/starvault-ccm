@@ -428,14 +428,7 @@ fn verify_open_file(
 
 #[cfg(windows)]
 fn open_identity_file(path: &Path) -> Result<File, LogIoError> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|error| LogIoError::at(path, error))
+    svccm_core::filesystem::open_reparse_point(path).map_err(|error| LogIoError::at(path, error))
 }
 
 #[cfg(windows)]
@@ -497,66 +490,17 @@ fn log_files(path: &Path) -> Vec<PathBuf> {
 }
 
 fn is_link_or_reparse(metadata: &Metadata) -> bool {
-    metadata.file_type().is_symlink() || super::is_reparse_point(metadata)
+    svccm_core::filesystem::is_link_or_reparse(metadata)
 }
 
 #[cfg(unix)]
 fn same_file(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-struct WindowsFileTime {
-    low_date_time: u32,
-    high_date_time: u32,
-}
-
-#[cfg(windows)]
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-struct WindowsFileInformation {
-    file_attributes: u32,
-    creation_time: WindowsFileTime,
-    last_access_time: WindowsFileTime,
-    last_write_time: WindowsFileTime,
-    volume_serial_number: u32,
-    file_size_high: u32,
-    file_size_low: u32,
-    number_of_links: u32,
-    file_index_high: u32,
-    file_index_low: u32,
-}
-
-#[cfg(windows)]
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    #[link_name = "GetFileInformationByHandle"]
-    fn get_file_information_by_handle(
-        file: *mut std::ffi::c_void,
-        information: *mut WindowsFileInformation,
-    ) -> i32;
+    svccm_core::filesystem::same_file(left, right)
 }
 
 #[cfg(windows)]
 fn file_identity(path: &Path, file: &File) -> Result<(u32, u64), LogIoError> {
-    use std::os::windows::io::AsRawHandle;
-
-    let mut information = WindowsFileInformation::default();
-    // SAFETY: `file` owns a valid handle and `information` points to a fully
-    // allocated structure with the layout required by Win32.
-    let succeeded = unsafe {
-        get_file_information_by_handle(file.as_raw_handle(), std::ptr::addr_of_mut!(information))
-    };
-    if succeeded == 0 {
-        return Err(LogIoError::at(path, std::io::Error::last_os_error()));
-    }
-    let index =
-        (u64::from(information.file_index_high) << 32) | u64::from(information.file_index_low);
-    Ok((information.volume_serial_number, index))
+    svccm_core::filesystem::file_identity(file).map_err(|error| LogIoError::at(path, error))
 }
 
 #[cfg(windows)]

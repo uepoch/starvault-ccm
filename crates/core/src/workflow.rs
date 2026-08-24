@@ -14,6 +14,7 @@ use crate::contracts::{
     ActiveCampaign, Health, HealthIssue, HealthState, LibrarySnapshot, StartupReport,
 };
 use crate::error::{internal_err, package_err, user_err, EnvironmentError, Error, Result};
+use crate::filesystem::{is_safe_operation_id, operation_sibling as sibling_path};
 use crate::identity::PackageId;
 use crate::layout::WindowsLayout;
 use crate::mods::{self, ExternalModsPolicy, PreparedModsTransition};
@@ -197,7 +198,6 @@ impl<'a> Workflow<'a> {
                         code: "recovery_required".into(),
                         message: "An interrupted campaign operation must be recovered".into(),
                         path: None,
-                        repairable: false,
                     }],
                 };
             }
@@ -208,7 +208,6 @@ impl<'a> Workflow<'a> {
                         code: error.code().to_string(),
                         message: error.to_string(),
                         path: error.path().map(|path| path.display().to_string()),
-                        repairable: false,
                     }],
                 };
             }
@@ -260,7 +259,6 @@ impl<'a> Workflow<'a> {
                     code: "recovery_required".into(),
                     message: "An interrupted campaign operation must be recovered".into(),
                     path: None,
-                    repairable: false,
                 }],
             });
         }
@@ -296,7 +294,7 @@ impl<'a> Workflow<'a> {
                 .map_err(|error| {
                     package_err(
                         "active_campaign_drifted",
-                        format!("the active campaign needs repair: {}", error),
+                        format!("the active campaign needs attention: {}", error),
                     )
                 })?;
             return Ok(active);
@@ -315,24 +313,6 @@ impl<'a> Workflow<'a> {
             return Ok(());
         }
         self.transition(OperationKind::Restore, None)
-    }
-
-    /// Explicitly replace drifted StarVault-created deployment files. The
-    /// original slot and changed created Mods files are backed up until the
-    /// repaired state verifies. Borrowed Mods are never overwritten.
-    pub fn repair_active(&self) -> Result<()> {
-        self.ensure_mutation_ready()?;
-        let active = self.store.active_campaign()?.ok_or_else(|| {
-            package_err(
-                "no_active_campaign",
-                "there is no active campaign to repair",
-            )
-        })?;
-        if self.verify_state_ready(Some(&active)).is_ok() {
-            return Ok(());
-        }
-        let manifest = self.verified_package_manifest(&active)?;
-        self.repair_transition(active, manifest)
     }
 
     /// Activate if needed, run final preflight, and launch without releasing
@@ -404,12 +384,6 @@ impl<'a> Workflow<'a> {
             }
             return self.finish_rollback_cleanup(&journal);
         }
-        if journal.kind == OperationKind::Repair {
-            if self.verify_state(journal.target_campaign.as_ref()).is_ok() {
-                return self.finish_committed(&journal);
-            }
-            return self.rollback_journal(&journal);
-        }
         if ledger == journal.target_campaign {
             self.finish_committed(&journal)?;
             return Ok(());
@@ -455,8 +429,18 @@ impl<'a> Workflow<'a> {
             .as_ref()
             .map(|campaign| self.campaign_manifest(campaign))
             .transpose()?;
-        self.verify_state_for_locked_operation(previous_campaign.as_ref())?;
+        if kind == OperationKind::Activate {
+            self.verify_state_for_locked_operation(previous_campaign.as_ref())?;
+        }
         let previous_mods = self.store.managed_mods()?;
+        if kind == OperationKind::Restore {
+            self.store.verify_managed_mods_manifest(
+                previous_manifest
+                    .as_ref()
+                    .ok_or_else(|| invalid_journal("restore has no active manifest"))?,
+                &previous_mods,
+            )?;
+        }
         let target_campaign = target_manifest.as_ref().map(campaign_from_manifest);
         let operation_id = next_operation_id();
         let planned_saves = self
@@ -470,16 +454,16 @@ impl<'a> Workflow<'a> {
             })
             .transpose()?;
         let mut paths = OperationPaths {
-            slots: SlotOperationJournal::new(
-                expected_slot_paths(
+            slot: Some(SlotOperationJournal::new(
+                expected_slot_path(
                     self.layout,
                     previous_campaign.as_ref(),
                     target_campaign.as_ref(),
                     &operation_id,
                 ),
-                Vec::new(),
-                Vec::new(),
-            ),
+                None,
+                None,
+            )),
             mods_staging: Some(sibling_path(
                 &self.layout.mods_dir(),
                 "staging",
@@ -546,7 +530,7 @@ impl<'a> Workflow<'a> {
             }
             Err(error) => return self.recover_preparation_error(&journal, error),
         };
-        journal.paths.slots = slots.journal_paths();
+        journal.paths.slot = Some(slots.journal_paths());
         journal.paths.save_recovery_proof = saves
             .as_ref()
             .map(|saves| saves.recovery_proof().cloned())
@@ -603,115 +587,7 @@ impl<'a> Workflow<'a> {
             .transpose()
     }
 
-    fn repair_transition(&self, active: ActiveCampaign, manifest: PackageManifest) -> Result<()> {
-        let operation_id = next_operation_id();
-        let previous_mods = self.store.managed_mods()?;
-        let paths = OperationPaths {
-            slots: SlotOperationJournal::new(
-                expected_slot_paths(self.layout, Some(&active), Some(&active), &operation_id),
-                Vec::new(),
-                Vec::new(),
-            ),
-            mods_staging: Some(sibling_path(
-                &self.layout.mods_dir(),
-                "staging",
-                &operation_id,
-            )),
-            mods_backup: Some(sibling_path(
-                &self.layout.mods_dir(),
-                "backup",
-                &operation_id,
-            )),
-            ..OperationPaths::default()
-        };
-        let mut journal = PendingOperation::new_preparing(
-            operation_id.clone(),
-            OperationKind::Repair,
-            Some(active.clone()),
-            Some(active.clone()),
-            paths,
-        );
-        journal.persist(self.store.root())?;
-        self.fail(FailurePoint::Preparing)?;
-
-        let prepared = (|| -> Result<_> {
-            self.ensure_mutation_checkpoint()?;
-            self.fail(FailurePoint::SavesPrepared)?;
-            let slots = SlotManager::new(self.layout, self.store)
-                .with_strategy(self.strategy)
-                .prepare_repair(&manifest, &operation_id)?;
-            self.fail(FailurePoint::SlotsPrepared)?;
-            self.ensure_mutation_checkpoint()?;
-            let mods = PreparedModsTransition::prepare_repair(
-                self.store,
-                &self.layout.mods_dir(),
-                &previous_mods,
-                &manifest,
-                &operation_id,
-            )?;
-            self.fail(FailurePoint::ModsPrepared)?;
-            Ok((slots, mods))
-        })();
-        let (slots, mods) = match prepared {
-            Ok(prepared) => prepared,
-            Err(error) if matches!(error.code(), "simulated_interruption" | "game_running") => {
-                return Err(error);
-            }
-            Err(error) => return self.recover_preparation_error(&journal, error),
-        };
-        journal.paths.slots = slots.journal_paths();
-        journal.paths.mods_plan_sha256 = Some(mods.plan_sha256().to_owned());
-        journal.advance(self.store.root(), OperationPhase::Prepared)?;
-        self.fail(FailurePoint::Prepared)?;
-
-        let result = (|| -> Result<()> {
-            self.ensure_mutation_checkpoint()?;
-            journal.advance(self.store.root(), OperationPhase::SavesSwapped)?;
-            self.fail(FailurePoint::SavesSwapped)?;
-            self.ensure_mutation_checkpoint()?;
-            slots.apply_journaled()?;
-            journal.advance(self.store.root(), OperationPhase::SlotsSwapped)?;
-            self.fail(FailurePoint::SlotsSwapped)?;
-            self.ensure_mutation_checkpoint()?;
-            mods.apply()?;
-            journal.advance(self.store.root(), OperationPhase::ModsSwapped)?;
-            self.fail(FailurePoint::ModsSwapped)?;
-            self.ensure_mutation_checkpoint()?;
-            self.store
-                .commit_active_state(Some(&active), mods.target_rows())?;
-            self.fail(FailurePoint::LedgerCommittedBeforeJournal)?;
-            journal.advance(self.store.root(), OperationPhase::LedgerCommitted)?;
-            self.fail(FailurePoint::LedgerCommitted)?;
-            self.finish_committed(&journal)
-        })();
-        match result {
-            Ok(()) => Ok(()),
-            Err(error) if matches!(error.code(), "simulated_interruption" | "game_running") => {
-                Err(error)
-            }
-            Err(error) => self.recover_after_error(&journal, error),
-        }
-    }
-
     fn recover_after_error(&self, journal: &PendingOperation, original: Error) -> Result<()> {
-        if journal.kind == OperationKind::Repair {
-            if self.verify_state(journal.target_campaign.as_ref()).is_ok() {
-                return self.finish_committed(journal);
-            }
-            return match self.rollback_journal(journal) {
-                Ok(()) => Err(original),
-                Err(rollback) if rollback.code() == "game_running" => Err(rollback),
-                Err(rollback) => Err(internal_err(
-                    "repair_rollback_failed",
-                    "StarVault could not restore the pre-repair files; recovery data was preserved",
-                    format!(
-                        "repair failed: {}; rollback failed: {}",
-                        original.diagnostic(),
-                        rollback.diagnostic()
-                    ),
-                )),
-            };
-        }
         let ledger = self.store.active_campaign()?;
         if ledger == journal.target_campaign {
             return match self.finish_committed(journal) {
@@ -786,7 +662,7 @@ impl<'a> Workflow<'a> {
         }
 
         self.ensure_mutation_checkpoint()?;
-        if let Err(error) = slots::finalize_paths(&journal.paths.slots) {
+        if let Err(error) = slots::finalize_paths(required_slot(journal)?) {
             failures.push(format!("slots: {}", error.diagnostic()));
         }
 
@@ -826,7 +702,7 @@ impl<'a> Workflow<'a> {
         if let Some(saves) = &saves {
             saves.verify_finalize_ready()?;
         }
-        slots::verify_finalize_bound_paths(&journal.paths.slots)?;
+        slots::verify_finalize_bound_paths(required_slot(journal)?)?;
         mods::verify_committed_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
         if let Some(saves) = &saves {
             self.ensure_mutation_checkpoint()?;
@@ -834,13 +710,13 @@ impl<'a> Workflow<'a> {
         }
         self.ensure_mutation_checkpoint()?;
         slots::commit_paths(
-            &journal.paths.slots,
+            required_slot(journal)?,
             journal.previous_campaign.is_some(),
             journal.target_campaign.is_some(),
         )?;
         self.verify_state_shape_ready(journal.target_campaign.as_ref())?;
         self.ensure_mutation_checkpoint()?;
-        slots::finalize_preverified_paths(&journal.paths.slots)?;
+        slots::finalize_preverified_paths(required_slot(journal)?)?;
         self.ensure_mutation_checkpoint()?;
         mods::finalize_preverified_paths(mods_backup, mods_staging)?;
         self.ensure_mutation_checkpoint()?;
@@ -878,15 +754,11 @@ impl<'a> Workflow<'a> {
             required_path(&journal.paths.mods_staging, "Mods staging")?,
             mods_plan_sha256,
         )?;
-        if journal.kind == OperationKind::Repair {
-            slots::verify_repair_rollback_paths(&journal.paths.slots, target.as_ref())?;
-        } else {
-            slots::verify_rollback_paths_checked(
-                &journal.paths.slots,
-                previous.as_ref(),
-                target.as_ref(),
-            )?;
-        }
+        slots::verify_rollback_paths_checked(
+            required_slot(journal)?,
+            previous.as_ref(),
+            target.as_ref(),
+        )?;
         if let Some(hook) = &self.rollback_pre_mutation_hook {
             hook();
         }
@@ -899,15 +771,7 @@ impl<'a> Workflow<'a> {
         )?;
         self.fail(FailurePoint::RollbackModsRestored)?;
         self.ensure_mutation_checkpoint()?;
-        if journal.kind == OperationKind::Repair {
-            slots::rollback_repair_paths_checked(&journal.paths.slots, target.as_ref())?;
-        } else {
-            slots::rollback_paths_checked(
-                &journal.paths.slots,
-                previous.as_ref(),
-                target.as_ref(),
-            )?;
-        }
+        slots::rollback_paths_checked(required_slot(journal)?, previous.as_ref(), target.as_ref())?;
         self.fail(FailurePoint::RollbackSlotsRestored)?;
         if let Some(saves) = saves {
             self.ensure_mutation_checkpoint()?;
@@ -920,7 +784,7 @@ impl<'a> Workflow<'a> {
             required_path(&journal.paths.mods_staging, "Mods staging")?,
             mods_plan_sha256,
         )?;
-        if journal.kind != OperationKind::Repair {
+        if journal.kind == OperationKind::Activate {
             self.verify_state_ready(journal.previous_campaign.as_ref())?;
         }
         let mut verified = journal.clone();
@@ -938,14 +802,14 @@ impl<'a> Workflow<'a> {
             .mods_plan_sha256
             .as_deref()
             .ok_or_else(|| invalid_journal("missing Mods plan digest"))?;
-        slots::verify_finalize_bound_paths(&journal.paths.slots)?;
+        slots::verify_finalize_bound_paths(required_slot(journal)?)?;
         mods::verify_rollback_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
         if let Some(saves) = self.recover_saves(journal)? {
             self.ensure_mutation_checkpoint()?;
             saves.rollback()?;
         }
         self.ensure_mutation_checkpoint()?;
-        slots::finalize_preverified_paths(&journal.paths.slots)?;
+        slots::finalize_preverified_paths(required_slot(journal)?)?;
         self.ensure_mutation_checkpoint()?;
         mods::finalize_preverified_paths(mods_backup, mods_staging)?;
         self.ensure_mutation_checkpoint()?;
@@ -966,8 +830,7 @@ impl<'a> Workflow<'a> {
         let complete_paths = save_path_count == 4;
         if journal.saves_participated != complete_paths
             || (has_paths && !complete_paths)
-            || (journal.kind != OperationKind::Repair
-                && journal.saves_participated != self.save_isolation_expected)
+            || journal.saves_participated != self.save_isolation_expected
         {
             return Err(package_err(
                 "recovery_required",
@@ -1000,9 +863,6 @@ impl<'a> Workflow<'a> {
             }
             return Ok(None);
         };
-        if journal.kind == OperationKind::Repair && !journal.saves_participated {
-            return Ok(None);
-        }
         if !journal.saves_participated {
             return Err(package_err(
                 "recovery_required",
@@ -1046,14 +906,6 @@ impl<'a> Workflow<'a> {
             OperationKind::Restore if journal.target_campaign.is_some() => {
                 return Err(invalid_journal("restore has a target campaign"));
             }
-            OperationKind::Repair
-                if journal.previous_campaign.is_none()
-                    || journal.previous_campaign != journal.target_campaign =>
-            {
-                return Err(invalid_journal(
-                    "repair does not name one unchanged active campaign",
-                ));
-            }
             _ => {}
         }
         if let Some(previous) = &journal.previous_campaign {
@@ -1062,22 +914,20 @@ impl<'a> Workflow<'a> {
         if let Some(target) = &journal.target_campaign {
             self.campaign_manifest(target)?;
         }
-        let expected_slots = expected_slot_paths(
+        let expected_slot = expected_slot_path(
             self.layout,
             journal.previous_campaign.as_ref(),
             journal.target_campaign.as_ref(),
             &journal.operation_id,
         );
-        if journal.paths.slots != expected_slots {
+        let slot = required_slot(journal)?;
+        if slot.paths != expected_slot {
             return Err(package_err(
                 "unsafe_operation_journal",
                 "campaign-slot recovery paths do not match the game layout",
             ));
         }
-        slots::validate_journal_bindings(
-            &journal.paths.slots,
-            journal.phase != OperationPhase::Preparing,
-        )?;
+        slots::validate_journal_bindings(slot, journal.phase != OperationPhase::Preparing)?;
         let mods_root = self.layout.mods_dir();
         if journal.paths.mods_staging.as_ref()
             != Some(&sibling_path(&mods_root, "staging", &journal.operation_id))
@@ -1108,11 +958,6 @@ impl<'a> Workflow<'a> {
 
     fn campaign_manifest(&self, campaign: &ActiveCampaign) -> Result<PackageManifest> {
         let manifest = self.store.load_manifest_fresh(&campaign.id)?;
-        Self::match_campaign_manifest(campaign, manifest)
-    }
-
-    fn verified_package_manifest(&self, campaign: &ActiveCampaign) -> Result<PackageManifest> {
-        let manifest = self.store.verify_package(&campaign.id)?;
         Self::match_campaign_manifest(campaign, manifest)
     }
 
@@ -1252,31 +1097,31 @@ fn save_transition(
     }
 }
 
-fn expected_slot_paths(
+fn expected_slot_path(
     layout: &WindowsLayout,
     previous: Option<&ActiveCampaign>,
     target: Option<&ActiveCampaign>,
     operation_id: &str,
-) -> Vec<SlotOperationPaths> {
+) -> SlotOperationPaths {
     let faction = target
         .map(|campaign| campaign.faction)
         .or_else(|| previous.map(|campaign| campaign.faction))
         .unwrap_or(crate::layout::SlotId::Wol);
     let live = layout.campaign_dir();
-    vec![SlotOperationPaths {
+    SlotOperationPaths {
         staging: sibling_path(&live, "staging", operation_id),
         backup: sibling_path(&live, "backup", operation_id),
         live,
         faction,
-    }]
+    }
 }
 
-fn sibling_path(path: &Path, kind: &str, operation_id: &str) -> PathBuf {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
-    path.with_file_name(format!("{name}.{kind}-{operation_id}"))
+fn required_slot(journal: &PendingOperation) -> Result<&SlotOperationJournal> {
+    journal
+        .paths
+        .slot
+        .as_ref()
+        .ok_or_else(|| invalid_journal("missing campaign-root operation"))
 }
 
 fn required_path<'a>(path: &'a Option<PathBuf>, label: &str) -> Result<&'a Path> {
@@ -1285,12 +1130,7 @@ fn required_path<'a>(path: &'a Option<PathBuf>, label: &str) -> Result<&'a Path>
 }
 
 fn validate_operation_id(operation_id: &str) -> Result<()> {
-    if operation_id.is_empty()
-        || operation_id.len() > 96
-        || !operation_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
+    if !is_safe_operation_id(operation_id) {
         return Err(invalid_journal("operation id is not a safe path component"));
     }
     Ok(())
@@ -1323,17 +1163,12 @@ fn next_operation_id() -> String {
 }
 
 fn health_from_error(error: Error, state: HealthState) -> Health {
-    let repairable = matches!(
-        error.code(),
-        "active_campaign_drifted" | "managed_file_changed" | "slot_drift"
-    );
     Health {
         state,
         issues: vec![HealthIssue {
             code: error.code().to_string(),
             message: error.to_string(),
             path: error.path().map(|path| path.display().to_string()),
-            repairable,
         }],
     }
 }

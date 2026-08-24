@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{internal_err, pkg_err, user_path_err, EnvironmentError, Result};
+use crate::filesystem::is_link_or_reparse;
 use crate::identity::PackageId;
 use crate::package::metadata::SlotGuessKind;
 use crate::package::normalize::PackagePlan;
@@ -587,19 +588,6 @@ fn invalid_scratch_path(path: &Path) -> crate::Error {
         path,
         false,
     )
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 fn nearest_existing_ancestor(path: &Path) -> &Path {

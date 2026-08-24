@@ -255,7 +255,7 @@ pub(super) fn ensure_game_stopped() -> Result<()> {
 pub(super) fn validate_regular_directory(path: &Path, code: &str) -> Result<()> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|error| svccm_core::error::user_path_err(code, error.to_string(), path, false))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() || is_reparse_point(&metadata) {
+    if !metadata.is_dir() || svccm_core::filesystem::is_link_or_reparse(&metadata) {
         return Err(svccm_core::error::user_path_err(
             code,
             "refusing to operate on a linked or non-directory root",
@@ -264,19 +264,6 @@ pub(super) fn validate_regular_directory(path: &Path, code: &str) -> Result<()> 
         ));
     }
     Ok(())
-}
-
-#[cfg(windows)]
-pub(super) fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-pub(super) fn is_reparse_point(_metadata: &std::fs::Metadata) -> bool {
-    false
 }
 
 #[cfg(test)]

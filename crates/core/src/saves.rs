@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{internal_err, user_err, user_path_err, Result};
+use crate::filesystem::{is_link_or_reparse, is_safe_operation_id};
 use crate::identity::{PackageId, ProfileId};
 use crate::layout::SlotId;
 use crate::operation::SaveRecoveryProof;
@@ -2149,29 +2150,11 @@ fn unsafe_internal_path(path: &Path, label: &str) -> crate::Error {
     )
 }
 
-#[cfg(windows)]
-fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
 fn validate_operation_id(operation_id: &str) -> Result<()> {
-    if operation_id.is_empty()
-        || operation_id.len() > 128
-        || !operation_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
+    if !is_safe_operation_id(operation_id) {
         return Err(user_err(
             "invalid_operation_id",
-            "operation id must contain 1 to 128 ASCII letters, digits, or dashes",
+            "operation id must contain 1 to 96 ASCII letters, digits, or dashes",
         ));
     }
     Ok(())

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{user_path_err, Result};
+use crate::filesystem::is_link_or_reparse;
 
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(1);
 
@@ -50,7 +51,7 @@ fn validate_existing_ancestors(path: &Path) -> Result<()> {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(io_at("inspect_output_directory", ancestor, error)),
         };
-        if !metadata.is_dir() || is_link_or_reparse_point(&metadata) {
+        if !metadata.is_dir() || is_link_or_reparse(&metadata) {
             return Err(user_path_err(
                 "unsafe_output_directory",
                 "refusing to write through a linked or non-directory output path",
@@ -103,19 +104,6 @@ fn is_retryable(error: &std::io::Error) -> bool {
             | std::io::ErrorKind::WouldBlock
             | std::io::ErrorKind::Interrupted
     )
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 #[cfg(not(windows))]

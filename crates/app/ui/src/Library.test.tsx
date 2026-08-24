@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { listLibrary, repairActive } from "./ipc";
+import { listLibrary } from "./ipc";
 import Library from "./Library";
 import type { LibrarySnapshot } from "./types";
 
@@ -11,7 +11,6 @@ vi.mock("./ipc", () => ({
   listLibrary: vi.fn(),
   playPackage: vi.fn(),
   removePackage: vi.fn(),
-  repairActive: vi.fn(),
   restoreVanilla: vi.fn(),
   revealPackage: vi.fn(),
 }));
@@ -69,7 +68,6 @@ describe("Library", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listLibrary).mockResolvedValue(readySnapshot);
-    vi.mocked(repairActive).mockResolvedValue(undefined);
   });
 
   it("shows one global active campaign and keeps Activate and Play separate", async () => {
@@ -96,7 +94,7 @@ describe("Library", () => {
     await waitFor(() => expect(titleHeader.getAttribute("aria-sort")).toBe("ascending"));
   });
 
-  it("offers Repair when the backend marks a health issue repairable", async () => {
+  it("directs active deployment drift to Return to vanilla", async () => {
     vi.mocked(listLibrary).mockResolvedValue({
       ...readySnapshot,
       health: {
@@ -105,36 +103,13 @@ describe("Library", () => {
           {
             code: "mods_drift",
             message: "Managed Mods differ from the ledger.",
-            repairable: true,
           },
         ],
       },
     });
     renderLibrary();
 
-    const repair = await screen.findByRole("button", { name: "Repair active campaign" });
-    fireEvent.click(repair);
-    await waitFor(() => expect(repairActive).toHaveBeenCalledOnce());
-  });
-
-  it("does not offer Repair when the backend marks a health issue non-repairable", async () => {
-    vi.mocked(listLibrary).mockResolvedValue({
-      ...readySnapshot,
-      health: {
-        state: "drifted",
-        issues: [
-          {
-            code: "package_missing",
-            message: "The active package is missing.",
-            repairable: false,
-          },
-        ],
-      },
-    });
-    renderLibrary();
-
-    await screen.findByText("The active package is missing.");
-    expect(screen.queryByRole("button", { name: "Repair active campaign" })).toBeNull();
+    await screen.findByText("Return to vanilla to discard the active deployment before retrying.");
   });
 
   it("blocks package mutations, including import, while recovery is required", async () => {
@@ -146,7 +121,6 @@ describe("Library", () => {
           {
             code: "interrupted_operation",
             message: "An interrupted operation must be recovered.",
-            repairable: false,
           },
         ],
       },

@@ -20,7 +20,6 @@ export const activatePackage = (id: string, options: ExternalModsOptions = {}) =
 export const playPackage = (id: string, options: ExternalModsOptions = {}) =>
   invoke<void>("play_package", { id, ...options });
 export const restoreVanilla = () => invoke<void>("restore_vanilla");
-export const repairActive = () => invoke<void>("repair_active");
 
 export const getConfig = () => invoke<ConfigDto>("get_config");
 export const getSavesStatus = () => invoke<SavesStatus>("get_saves_status");

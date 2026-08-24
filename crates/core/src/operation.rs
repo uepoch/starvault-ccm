@@ -2,16 +2,16 @@
 
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::Read;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::contracts::ActiveCampaign;
 use crate::error::{package_err, Result};
+use crate::filesystem::is_link_or_reparse;
 use crate::layout::SlotId;
 
-pub const JOURNAL_VERSION: u32 = 6;
+pub const JOURNAL_VERSION: u32 = 7;
 pub const JOURNAL_FILE: &str = "pending-operation.json";
 const MAX_JOURNAL_BYTES: u64 = 1024 * 1024;
 
@@ -33,7 +33,6 @@ struct OpenedJournal {
 pub enum OperationKind {
     Activate,
     Restore,
-    Repair,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -73,9 +72,8 @@ pub struct OperationPaths {
     /// merely by changing an operation sidecar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub save_recovery_proof: Option<SaveRecoveryProof>,
-    /// Exactly one entry for the global `Maps/Campaign` root.
-    #[serde(default, skip_serializing_if = "SlotOperationJournal::is_empty")]
-    pub slots: SlotOperationJournal,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<SlotOperationJournal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mods_staging: Option<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -116,15 +114,14 @@ pub struct SlotOperationPaths {
 
 /// Campaign-root paths plus the actual previous and target object identities
 /// captured before the journal advances to `prepared`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SlotOperationJournal {
-    #[serde(default)]
-    paths: Vec<SlotOperationPaths>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    previous_states: Vec<SlotStateBinding>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    target_states: Vec<SlotStateBinding>,
+    pub paths: SlotOperationPaths,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_state: Option<SlotStateBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_state: Option<SlotStateBinding>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,53 +142,24 @@ pub(crate) struct SlotStateBinding {
 }
 
 impl SlotOperationJournal {
-    pub fn is_empty(&self) -> bool {
-        self.paths.is_empty()
-    }
-
     pub(crate) fn new(
-        paths: Vec<SlotOperationPaths>,
-        previous_states: Vec<SlotStateBinding>,
-        target_states: Vec<SlotStateBinding>,
+        paths: SlotOperationPaths,
+        previous_state: Option<SlotStateBinding>,
+        target_state: Option<SlotStateBinding>,
     ) -> Self {
         Self {
             paths,
-            previous_states,
-            target_states,
+            previous_state,
+            target_state,
         }
     }
 
-    pub(crate) fn previous_states(&self) -> &[SlotStateBinding] {
-        &self.previous_states
+    pub(crate) fn previous_state(&self) -> Option<&SlotStateBinding> {
+        self.previous_state.as_ref()
     }
 
-    pub(crate) fn target_states(&self) -> &[SlotStateBinding] {
-        &self.target_states
-    }
-}
-
-impl Deref for SlotOperationJournal {
-    type Target = [SlotOperationPaths];
-
-    fn deref(&self) -> &Self::Target {
-        &self.paths
-    }
-}
-
-impl<'a> IntoIterator for &'a SlotOperationJournal {
-    type Item = &'a SlotOperationPaths;
-    type IntoIter = std::slice::Iter<'a, SlotOperationPaths>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.paths.iter()
-    }
-}
-
-// Workflow path validation intentionally compares only the filesystem paths.
-// State evidence is validated against those paths by the checked slot APIs.
-impl PartialEq<Vec<SlotOperationPaths>> for SlotOperationJournal {
-    fn eq(&self, other: &Vec<SlotOperationPaths>) -> bool {
-        self.paths == *other
+    pub(crate) fn target_state(&self) -> Option<&SlotStateBinding> {
+        self.target_state.as_ref()
     }
 }
 
@@ -401,7 +369,7 @@ fn open_verified_journal(path: &Path) -> Result<Option<OpenedJournal>> {
 }
 
 fn validate_journal_metadata(metadata: &Metadata) -> Result<()> {
-    if !metadata.is_file() || is_link_or_reparse_point(metadata) {
+    if !metadata.is_file() || is_link_or_reparse(metadata) {
         return Err(package_err(
             "unsafe_operation_journal",
             "operation journal must be a regular file",
@@ -424,14 +392,11 @@ fn opened_file_is_current(
     _file: &File,
     opened: &Metadata,
 ) -> Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-
     let current = std::fs::symlink_metadata(path).map_err(|error| {
         crate::error::user_path_err("inspect_operation_journal", error.to_string(), path, true)
     })?;
-    let same =
-        |left: &Metadata, right: &Metadata| left.dev() == right.dev() && left.ino() == right.ino();
-    Ok(same(&current, opened) && initial.is_none_or(|initial| same(initial, opened)))
+    Ok(crate::filesystem::same_file(&current, opened)
+        && initial.is_none_or(|initial| crate::filesystem::same_file(initial, opened)))
 }
 
 #[cfg(windows)]
@@ -487,16 +452,9 @@ fn capture_open_identity(_path: &Path) -> Result<OpenIdentity> {
 
 #[cfg(windows)]
 fn open_identity_file(path: &Path) -> Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|error| {
-            crate::error::user_path_err("read_operation_journal", error.to_string(), path, true)
-        })
+    crate::filesystem::open_reparse_point(path).map_err(|error| {
+        crate::error::user_path_err("read_operation_journal", error.to_string(), path, true)
+    })
 }
 
 #[cfg(windows)]
@@ -509,70 +467,9 @@ fn validate_identity_handle(path: &Path, file: &File) -> Result<()> {
 
 #[cfg(windows)]
 fn windows_file_identity(file: &File, path: &Path) -> Result<(u32, u64)> {
-    use std::os::windows::io::AsRawHandle;
-
-    #[derive(Clone, Copy, Default)]
-    #[repr(C)]
-    struct WindowsFileTime {
-        low_date_time: u32,
-        high_date_time: u32,
-    }
-
-    #[derive(Clone, Copy, Default)]
-    #[repr(C)]
-    struct WindowsFileInformation {
-        file_attributes: u32,
-        creation_time: WindowsFileTime,
-        last_access_time: WindowsFileTime,
-        last_write_time: WindowsFileTime,
-        volume_serial_number: u32,
-        file_size_high: u32,
-        file_size_low: u32,
-        number_of_links: u32,
-        file_index_high: u32,
-        file_index_low: u32,
-    }
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        #[link_name = "GetFileInformationByHandle"]
-        fn get_file_information_by_handle(
-            file: *mut std::ffi::c_void,
-            information: *mut WindowsFileInformation,
-        ) -> i32;
-    }
-
-    let mut information = WindowsFileInformation::default();
-    // SAFETY: `file` owns a valid handle and `information` points to a fully
-    // allocated structure with the layout required by Win32.
-    let result = unsafe {
-        get_file_information_by_handle(file.as_raw_handle(), std::ptr::addr_of_mut!(information))
-    };
-    if result == 0 {
-        return Err(crate::error::user_path_err(
-            "inspect_operation_journal",
-            std::io::Error::last_os_error().to_string(),
-            path,
-            true,
-        ));
-    }
-    Ok((
-        information.volume_serial_number,
-        (u64::from(information.file_index_high) << 32) | u64::from(information.file_index_low),
-    ))
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
+    crate::filesystem::file_identity(file).map_err(|error| {
+        crate::error::user_path_err("inspect_operation_journal", error.to_string(), path, true)
+    })
 }
 
 #[cfg(test)]
@@ -624,7 +521,7 @@ mod tests {
         let path = PendingOperation::path(directory.path());
         std::fs::write(
             path,
-            r#"{"version":99,"operation_id":"x","kind":"repair","phase":"prepared","previous_campaign":null,"target_campaign":null,"paths":{}}"#,
+            r#"{"version":99,"operation_id":"x","kind":"activate","phase":"prepared","previous_campaign":null,"target_campaign":null,"paths":{}}"#,
         )
         .unwrap();
         assert!(PendingOperation::load(directory.path()).is_err());
@@ -640,24 +537,24 @@ mod tests {
             backup: directory.path().join("void.backup-operation-1"),
         };
         let paths = OperationPaths {
-            slots: SlotOperationJournal::new(
-                vec![slot],
-                vec![SlotStateBinding {
+            slot: Some(SlotOperationJournal::new(
+                slot,
+                Some(SlotStateBinding {
                     faction: SlotId::LotV,
                     kind: SlotStateKind::Directory,
                     sha256: "a".repeat(64),
-                }],
-                vec![SlotStateBinding {
+                }),
+                Some(SlotStateBinding {
                     faction: SlotId::LotV,
                     kind: SlotStateKind::Junction,
                     sha256: "b".repeat(64),
-                }],
-            ),
+                }),
+            )),
             ..OperationPaths::default()
         };
         let journal = PendingOperation::new(
             "operation-1".into(),
-            OperationKind::Repair,
+            OperationKind::Activate,
             None,
             None,
             paths,
@@ -669,8 +566,8 @@ mod tests {
             Some(journal)
         );
         let serialized = std::fs::read_to_string(PendingOperation::path(directory.path())).unwrap();
-        assert!(serialized.contains("previous_states"));
-        assert!(serialized.contains("target_states"));
+        assert!(serialized.contains("previous_state"));
+        assert!(serialized.contains("target_state"));
         assert!(serialized.contains(&"a".repeat(64)));
         assert!(serialized.contains(&"b".repeat(64)));
     }

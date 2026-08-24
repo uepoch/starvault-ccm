@@ -8,6 +8,9 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{internal_err, package_err, user_path_err, Result};
+use crate::filesystem::{
+    is_link_or_reparse as is_link, is_safe_operation_id, operation_sibling as sibling_path,
+};
 use crate::store::{ManagedMod, ManagedModDisposition, PackageManifest, Store};
 
 const PLAN_FILE: &str = "mods-plan.json";
@@ -45,15 +48,11 @@ struct ModsPlan {
     previous: Vec<ManagedMod>,
     target: Vec<ManagedMod>,
     backed_up: Vec<String>,
-    #[serde(default)]
-    repair: bool,
-    #[serde(default)]
-    repair_originals: Vec<RepairOriginal>,
     /// External files the user explicitly allowed this operation to replace.
     /// They remain in the operation backup for rollback, then are discarded
     /// once the activation commits.
     #[serde(default)]
-    replaced_external: Vec<RepairOriginal>,
+    replaced_external: Vec<ExternalOriginal>,
     /// Complete top-level `.SC2Mod` files or directories that can be renamed
     /// from the sibling staging tree instead of copied a second time.
     #[serde(default)]
@@ -65,7 +64,7 @@ struct ModsPlan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct RepairOriginal {
+struct ExternalOriginal {
     path: String,
     sha256: Option<String>,
 }
@@ -150,10 +149,17 @@ impl PreparedModsTransition {
     ) -> Result<Self> {
         validate_operation_id(operation_id)?;
         verify_mods_root(mods_root)?;
-        if verify_contents {
-            verify_managed(mods_root, previous)?;
-        } else {
-            verify_managed_shape(mods_root, previous)?;
+        let restore_previous = target
+            .is_none()
+            .then(|| inventory_owned_for_restore(mods_root, previous))
+            .transpose()?;
+        let previous = restore_previous.as_deref().unwrap_or(previous);
+        if restore_previous.is_none() {
+            if verify_contents {
+                verify_managed(mods_root, previous)?;
+            } else {
+                verify_managed_shape(mods_root, previous)?;
+            }
         }
         let staging = sibling_path(mods_root, "staging", operation_id);
         let backup = sibling_path(mods_root, "backup", operation_id);
@@ -223,134 +229,9 @@ impl PreparedModsTransition {
                 previous: previous.to_vec(),
                 target: target_rows,
                 backed_up,
-                repair: false,
-                repair_originals: Vec::new(),
                 replaced_external,
                 atomic_units,
                 backup_units,
-            };
-            persist_plan(&backup, &plan)?;
-            let plan_path = backup.join(PLAN_FILE);
-            ensure_artifact_regular_file(&backup, &plan_path, "Mods backup")?;
-            let plan_sha256 = hash_file(&plan_path)?;
-            Ok(Self {
-                mods_root: mods_root.to_path_buf(),
-                staging: staging.clone(),
-                backup: backup.clone(),
-                plan_sha256,
-                plan,
-            })
-        })();
-        if prepared.is_err() {
-            let _ = remove_entry_if_exists(&staging);
-            let _ = remove_entry_if_exists(&backup);
-        }
-        prepared
-    }
-
-    /// Stage an explicit repair of created files. Borrowed files remain
-    /// external property and must still match; a changed borrowed file blocks
-    /// repair instead of being overwritten.
-    pub fn prepare_repair(
-        store: &Store,
-        mods_root: &Path,
-        previous: &[ManagedMod],
-        target: &PackageManifest,
-        operation_id: &str,
-    ) -> Result<Self> {
-        validate_operation_id(operation_id)?;
-        verify_mods_root(mods_root)?;
-        let staging = sibling_path(mods_root, "staging", operation_id);
-        let backup = sibling_path(mods_root, "backup", operation_id);
-        ensure_absent(&staging)?;
-        ensure_absent(&backup)?;
-        std::fs::create_dir_all(&staging)?;
-        std::fs::create_dir_all(backup.join(BACKUP_FILES))?;
-
-        let prepared = (|| -> Result<Self> {
-            store.materialize_mods(target, &staging)?;
-            let (target_rows, replaced_external) = plan_target(
-                mods_root,
-                previous,
-                Some(target),
-                ExternalModsPolicy::Reject,
-            )?;
-            debug_assert!(replaced_external.is_empty());
-            if target_rows.len() != previous.len()
-                || target_rows.iter().zip(previous).any(|(target, previous)| {
-                    key(&target.path) != key(&previous.path)
-                        || target.sha256 != previous.sha256
-                        || target.disposition != previous.disposition
-                })
-            {
-                return Err(internal_err(
-                    "managed_mods_manifest_mismatch",
-                    "StarVault could not repair the active Mods files",
-                    "managed Mods rows do not match the active package manifest",
-                ));
-            }
-
-            let mut originals = Vec::new();
-            for managed in previous {
-                let path = join_relative(mods_root, &managed.path)?;
-                if managed.disposition == ManagedModDisposition::Borrowed {
-                    verify_managed(mods_root, std::slice::from_ref(managed))?;
-                    continue;
-                }
-                ensure_managed_ancestors(mods_root, &path)?;
-                match std::fs::symlink_metadata(&path) {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        originals.push(RepairOriginal {
-                            path: managed.path.clone(),
-                            sha256: None,
-                        });
-                    }
-                    Err(error) => {
-                        return Err(user_path_err(
-                            "inspect_managed_mod",
-                            error.to_string(),
-                            &path,
-                            true,
-                        ));
-                    }
-                    Ok(metadata) if metadata.file_type().is_file() && !is_link(&metadata) => {
-                        let actual_hash = hash_file(&path)?;
-                        let destination = join_relative(&backup.join(BACKUP_FILES), &managed.path)?;
-                        copy_managed_file(mods_root, &path, &backup, &destination)?;
-                        ensure_artifact_regular_file(&backup, &destination, "Mods backup")?;
-                        if hash_file(&destination)? != actual_hash {
-                            return Err(internal_err(
-                                "mods_backup_verification_failed",
-                                "StarVault could not back up the drifted Mods files",
-                                format!("repair backup of `{}` changed", managed.path),
-                            ));
-                        }
-                        originals.push(RepairOriginal {
-                            path: managed.path.clone(),
-                            sha256: Some(actual_hash),
-                        });
-                    }
-                    Ok(_) => {
-                        return Err(package_err(
-                            "repair_unsafe_managed_entry",
-                            format!(
-                                "managed Mods path `{}` is no longer a regular file",
-                                managed.path
-                            ),
-                        ));
-                    }
-                }
-            }
-            originals.sort_by_key(|original| key(&original.path));
-            let plan = ModsPlan {
-                previous: previous.to_vec(),
-                target: target_rows,
-                backed_up: Vec::new(),
-                repair: true,
-                repair_originals: originals,
-                replaced_external: Vec::new(),
-                atomic_units: Vec::new(),
-                backup_units: Vec::new(),
             };
             persist_plan(&backup, &plan)?;
             let plan_path = backup.join(PLAN_FILE);
@@ -389,11 +270,7 @@ impl PreparedModsTransition {
 
     pub fn apply(&self) -> Result<()> {
         write_artifact(&self.backup, APPLY_STARTED, b"started")?;
-        let result = if self.plan.repair {
-            self.apply_repair()
-        } else {
-            self.apply_standard()
-        };
+        let result = self.apply_standard();
         if result.is_ok() {
             write_artifact(&self.backup, APPLY_COMPLETE, b"complete")?;
         }
@@ -488,38 +365,6 @@ impl PreparedModsTransition {
         verify_managed_shape(&self.mods_root, &self.plan.target)
     }
 
-    fn apply_repair(&self) -> Result<()> {
-        verify_repair_originals(&self.mods_root, &self.plan)?;
-        let mut created: Vec<&ManagedMod> = self
-            .plan
-            .target
-            .iter()
-            .filter(|managed| managed.disposition == ManagedModDisposition::Created)
-            .collect();
-        created.sort_by_key(|managed| std::cmp::Reverse(path_depth(&managed.path)));
-        for managed in &created {
-            let path = join_relative(&self.mods_root, &managed.path)?;
-            ensure_managed_ancestors(&self.mods_root, &path)?;
-            remove_entry_if_exists(&path)?;
-            prune_empty_parents(path.parent(), &self.mods_root)?;
-        }
-        created.sort_by_key(|managed| path_depth(&managed.path));
-        for managed in created {
-            let source = join_relative(&self.staging, &managed.path)?;
-            let destination = join_relative(&self.mods_root, &managed.path)?;
-            prepare_owned_target(&destination, &self.mods_root, &[])?;
-            copy_atomic(
-                &self.staging,
-                &source,
-                &self.mods_root,
-                &destination,
-                &self.backup,
-                &managed.path,
-            )?;
-        }
-        verify_managed_shape(&self.mods_root, &self.plan.target)
-    }
-
     pub fn rollback(&self) -> Result<()> {
         rollback_from_paths(&self.mods_root, &self.backup, &self.staging)
     }
@@ -580,18 +425,11 @@ fn rollback_from_plan_preserving(
     plan: &ModsPlan,
 ) -> Result<()> {
     if !artifact_file_exists(backup, APPLY_STARTED)? {
-        if plan.repair {
-            verify_repair_originals(mods_root, plan)?;
-        } else {
-            verify_managed(mods_root, &plan.previous)?;
-            verify_external_originals(mods_root, &plan.replaced_external)?;
-        }
+        verify_managed(mods_root, &plan.previous)?;
+        verify_external_originals(mods_root, &plan.replaced_external)?;
         return Ok(());
     }
     verify_rollback_plan(mods_root, backup, staging, plan)?;
-    if plan.repair {
-        return rollback_repair_preserving(mods_root, backup, plan);
-    }
     rollback_atomic_target_units(mods_root, backup, staging, plan)?;
     let previous_by_key: BTreeMap<String, &ManagedMod> = plan
         .previous
@@ -910,12 +748,8 @@ fn verify_rollback_from_plan(
     plan: &ModsPlan,
 ) -> Result<()> {
     if !artifact_file_exists(backup, APPLY_STARTED)? {
-        return if plan.repair {
-            verify_repair_originals(mods_root, plan)
-        } else {
-            verify_managed(mods_root, &plan.previous)?;
-            verify_external_originals(mods_root, &plan.replaced_external)
-        };
+        verify_managed(mods_root, &plan.previous)?;
+        return verify_external_originals(mods_root, &plan.replaced_external);
     }
     verify_rollback_plan(mods_root, backup, staging, plan)
 }
@@ -932,41 +766,6 @@ fn verify_rollback_plan(
     staging: &Path,
     plan: &ModsPlan,
 ) -> Result<()> {
-    if plan.repair {
-        for managed in plan
-            .target
-            .iter()
-            .filter(|managed| managed.disposition == ManagedModDisposition::Created)
-        {
-            let path = join_relative(mods_root, &managed.path)?;
-            let original = plan
-                .repair_originals
-                .iter()
-                .find(|original| key(&original.path) == key(&managed.path));
-            classify_repair_rollback_target(mods_root, &path, managed, original)?;
-        }
-        for original in &plan.repair_originals {
-            if let Some(expected) = &original.sha256 {
-                let source = join_relative(&backup.join(BACKUP_FILES), &original.path)?;
-                ensure_artifact_regular_file(backup, &source, "Mods backup")?;
-                if hash_file(&source)? != *expected {
-                    return Err(package_err(
-                        "recovery_required",
-                        format!("repair backup of Mods file `{}` has changed", original.path),
-                    ));
-                }
-            }
-        }
-        for managed in plan
-            .previous
-            .iter()
-            .filter(|managed| managed.disposition == ManagedModDisposition::Borrowed)
-        {
-            verify_managed(mods_root, std::slice::from_ref(managed))?;
-        }
-        return Ok(());
-    }
-
     verify_atomic_rollback_plan(mods_root, backup, staging, plan)?;
 
     let previous_by_key: BTreeMap<String, &ManagedMod> = plan
@@ -1048,7 +847,7 @@ fn verify_rollback_plan(
     Ok(())
 }
 
-fn verify_external_originals(mods_root: &Path, originals: &[RepairOriginal]) -> Result<()> {
+fn verify_external_originals(mods_root: &Path, originals: &[ExternalOriginal]) -> Result<()> {
     for original in originals {
         let expected = original.sha256.as_deref().ok_or_else(|| {
             internal_err(
@@ -1224,97 +1023,6 @@ fn classify_rollback_target(
             target.path
         ),
     ))
-}
-
-fn classify_repair_rollback_target(
-    mods_root: &Path,
-    path: &Path,
-    target: &ManagedMod,
-    original: Option<&RepairOriginal>,
-) -> Result<RollbackTarget> {
-    ensure_managed_ancestors(mods_root, path)?;
-    let metadata = match std::fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(RollbackTarget::AbsentOrPrevious);
-        }
-        Err(error) => {
-            return Err(user_path_err(
-                "inspect_managed_mod",
-                error.to_string(),
-                path,
-                true,
-            ));
-        }
-    };
-    if metadata.file_type().is_file() && !is_link(&metadata) {
-        let actual = hash_file(path)?;
-        if actual == target.sha256 {
-            return Ok(RollbackTarget::Target);
-        }
-        if original
-            .and_then(|original| original.sha256.as_ref())
-            .is_some_and(|expected| expected == &actual)
-        {
-            return Ok(RollbackTarget::AbsentOrPrevious);
-        }
-    }
-    Err(package_err(
-        "managed_file_changed",
-        format!(
-            "managed Mods file `{}` changed during repair recovery",
-            target.path
-        ),
-    ))
-}
-
-fn rollback_repair_preserving(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Result<()> {
-    let mut target_created: Vec<&ManagedMod> = plan
-        .target
-        .iter()
-        .filter(|managed| managed.disposition == ManagedModDisposition::Created)
-        .collect();
-    target_created.sort_by_key(|managed| std::cmp::Reverse(path_depth(&managed.path)));
-    for managed in target_created {
-        let path = join_relative(mods_root, &managed.path)?;
-        let original = plan
-            .repair_originals
-            .iter()
-            .find(|original| key(&original.path) == key(&managed.path));
-        match classify_repair_rollback_target(mods_root, &path, managed, original)? {
-            RollbackTarget::AbsentOrPrevious => {}
-            RollbackTarget::Target => {
-                remove_managed_regular_if_hash(mods_root, &path, &managed.sha256)?;
-                prune_empty_parents(path.parent(), mods_root)?;
-            }
-        }
-    }
-
-    for original in &plan.repair_originals {
-        let Some(expected_hash) = &original.sha256 else {
-            continue;
-        };
-        let source = join_relative(&backup.join(BACKUP_FILES), &original.path)?;
-        ensure_artifact_regular_file(backup, &source, "Mods backup")?;
-        if hash_file(&source)? != *expected_hash {
-            return Err(package_err(
-                "recovery_required",
-                format!("repair backup of Mods file `{}` has changed", original.path),
-            ));
-        }
-        let destination = join_relative(mods_root, &original.path)?;
-        prepare_recovery_target(&destination, mods_root, &plan.target, Some(expected_hash))?;
-        copy_atomic(
-            &backup.join(BACKUP_FILES),
-            &source,
-            mods_root,
-            &destination,
-            backup,
-            &original.path,
-        )?;
-    }
-    verify_repair_originals(mods_root, plan)?;
-    Ok(())
 }
 
 pub fn finalize_paths(backup: &Path, staging: &Path) -> Result<()> {
@@ -1499,16 +1207,6 @@ fn verify_bound_backup(backup: &Path, expected_plan_sha256: &str) -> Result<Mods
             &format!("{BACKUP_FILES}/{}", relative.replace('\\', "/")),
             &previous.sha256,
         )?;
-    }
-    for original in &plan.repair_originals {
-        if let Some(sha256) = &original.sha256 {
-            insert_expected_artifact_file(
-                &mut expected_directories,
-                &mut expected_files,
-                &format!("{BACKUP_FILES}/{}", original.path.replace('\\', "/")),
-                sha256,
-            )?;
-        }
     }
     for original in &plan.replaced_external {
         let sha256 = original.sha256.as_deref().ok_or_else(|| {
@@ -1956,54 +1654,12 @@ fn changed_managed_error(managed: &ManagedMod, message: String) -> crate::Error 
     package_err(code, message)
 }
 
-fn verify_repair_originals(mods_root: &Path, plan: &ModsPlan) -> Result<()> {
-    for managed in plan
-        .previous
-        .iter()
-        .filter(|managed| managed.disposition == ManagedModDisposition::Borrowed)
-    {
-        verify_managed(mods_root, std::slice::from_ref(managed))?;
-    }
-    for original in &plan.repair_originals {
-        let path = join_relative(mods_root, &original.path)?;
-        ensure_managed_ancestors(mods_root, &path)?;
-        match (&original.sha256, std::fs::symlink_metadata(&path)) {
-            (None, Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {}
-            (None, Ok(_)) => {
-                return Err(package_err(
-                    "managed_file_changed",
-                    format!("managed Mods path `{}` reappeared", original.path),
-                ));
-            }
-            (None, Err(error)) => {
-                return Err(user_path_err(
-                    "inspect_managed_mod",
-                    error.to_string(),
-                    &path,
-                    true,
-                ));
-            }
-            (Some(expected), Ok(metadata))
-                if metadata.file_type().is_file()
-                    && !is_link(&metadata)
-                    && hash_file(&path)? == *expected => {}
-            (Some(_), Ok(_)) | (Some(_), Err(_)) => {
-                return Err(package_err(
-                    "managed_file_changed",
-                    format!("managed Mods file `{}` changed again", original.path),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 fn plan_target(
     mods_root: &Path,
     previous: &[ManagedMod],
     target: Option<&PackageManifest>,
     external_policy: ExternalModsPolicy,
-) -> Result<(Vec<ManagedMod>, Vec<RepairOriginal>)> {
+) -> Result<(Vec<ManagedMod>, Vec<ExternalOriginal>)> {
     let previous_by_key: BTreeMap<String, &ManagedMod> = previous
         .iter()
         .map(|managed| (key(&managed.path), managed))
@@ -2028,7 +1684,7 @@ fn plan_target(
             }
             Some(previous) if external_policy == ExternalModsPolicy::Replace => (
                 ManagedModDisposition::Created,
-                Some(RepairOriginal {
+                Some(ExternalOriginal {
                     path: path.clone(),
                     sha256: Some(previous.sha256.clone()),
                 }),
@@ -2065,7 +1721,7 @@ fn plan_atomic_units(
     mods_root: &Path,
     previous: &[ManagedMod],
     target: &[ManagedMod],
-    replaced_external: &[RepairOriginal],
+    replaced_external: &[ExternalOriginal],
 ) -> Result<(Vec<AtomicModUnit>, Vec<AtomicModUnit>)> {
     let previous_groups = group_atomic_units(previous);
     let target_groups = group_atomic_units(target);
@@ -2153,6 +1809,132 @@ fn group_atomic_units(managed: &[ManagedMod]) -> BTreeMap<String, (String, Vec<&
             .push(managed);
     }
     grouped
+}
+
+fn inventory_owned_for_restore(
+    mods_root: &Path,
+    managed: &[ManagedMod],
+) -> Result<Vec<ManagedMod>> {
+    let mut rows = Vec::new();
+    let mut whole_units = BTreeSet::new();
+    for (_, (unit, unit_rows)) in group_atomic_units(managed) {
+        if !unit_rows
+            .iter()
+            .all(|row| row.disposition == ManagedModDisposition::Created)
+        {
+            continue;
+        }
+        let path = join_relative(mods_root, &unit)?;
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue
+            }
+            Err(error) => {
+                return Err(user_path_err(
+                    "inspect_managed_mod",
+                    error.to_string(),
+                    &path,
+                    true,
+                ));
+            }
+        };
+        if is_link(&metadata) {
+            return Err(package_err(
+                "managed_file_changed",
+                format!("owned Mods container `{unit}` became a link"),
+            ));
+        }
+        let files = if metadata.is_dir() {
+            inventory_files(&path)?
+        } else if metadata.file_type().is_file() {
+            vec![path]
+        } else {
+            return Err(package_err(
+                "managed_file_changed",
+                format!("owned Mods container `{unit}` has an unsupported file type"),
+            ));
+        };
+        let mut unit_inventory = Vec::new();
+        for file in files {
+            let relative = file
+                .strip_prefix(mods_root)
+                .map_err(|error| {
+                    internal_err(
+                        "mods_path_outside_root",
+                        "StarVault could not inventory the owned Mods deployment",
+                        error.to_string(),
+                    )
+                })?
+                .to_string_lossy()
+                .replace('\\', "/");
+            unit_inventory.push(ManagedMod {
+                path: relative,
+                sha256: hash_file(&file)?,
+                disposition: ManagedModDisposition::Created,
+            });
+        }
+        let expected = unit_rows
+            .iter()
+            .map(|row| key(&row.path))
+            .collect::<BTreeSet<_>>();
+        let actual = unit_inventory
+            .iter()
+            .map(|row| key(&row.path))
+            .collect::<BTreeSet<_>>();
+        if actual == expected {
+            whole_units.insert(key(&unit));
+            rows.extend(unit_inventory);
+        }
+    }
+
+    for managed in managed.iter().filter(|managed| {
+        managed.disposition == ManagedModDisposition::Created
+            && !whole_units.contains(&key(managed.path.split('/').next().unwrap_or_default()))
+    }) {
+        let path = join_relative(mods_root, &managed.path)?;
+        ensure_managed_ancestors(mods_root, &path)?;
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue
+            }
+            Err(error) => {
+                return Err(user_path_err(
+                    "inspect_managed_mod",
+                    error.to_string(),
+                    &path,
+                    true,
+                ));
+            }
+        };
+        if !metadata.file_type().is_file() || is_link(&metadata) {
+            return Err(package_err(
+                "managed_file_changed",
+                format!(
+                    "owned Mods path `{}` has an unsupported file type",
+                    managed.path
+                ),
+            ));
+        }
+        rows.push(ManagedMod {
+            path: managed.path.clone(),
+            sha256: hash_file(&path)?,
+            disposition: ManagedModDisposition::Created,
+        });
+    }
+    rows.sort_by_key(|managed| key(&managed.path));
+    Ok(rows)
 }
 
 fn atomic_unit_kind(path: &str, rows: &[&ManagedMod]) -> Option<AtomicModUnitKind> {
@@ -2388,7 +2170,7 @@ fn classify_unmanaged_target(
     previous: &[ManagedMod],
     desired_keys: &BTreeSet<String>,
     external_policy: ExternalModsPolicy,
-) -> Result<(ManagedModDisposition, Option<RepairOriginal>)> {
+) -> Result<(ManagedModDisposition, Option<ExternalOriginal>)> {
     let target = join_relative(mods_root, relative)?;
     inspect_ancestors(mods_root, &target, previous)?;
     match std::fs::symlink_metadata(&target) {
@@ -2413,7 +2195,7 @@ fn classify_unmanaged_target(
             } else if external_policy == ExternalModsPolicy::Replace {
                 Ok((
                     ManagedModDisposition::Created,
-                    Some(RepairOriginal {
+                    Some(ExternalOriginal {
                         path: relative.to_string(),
                         sha256: Some(actual),
                     }),
@@ -3067,19 +2849,6 @@ fn ensure_owned_directory(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-#[cfg(windows)]
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
-}
-
 #[cfg(unix)]
 fn opened_plan_is_current(
     path: &Path,
@@ -3088,13 +2857,10 @@ fn opened_plan_is_current(
     _file: &File,
     opened: &Metadata,
 ) -> Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-
     let current = std::fs::symlink_metadata(path)
         .map_err(|error| user_path_err("inspect_mods_artifact", error.to_string(), path, true))?;
-    let same =
-        |left: &Metadata, right: &Metadata| left.dev() == right.dev() && left.ino() == right.ino();
-    Ok(same(&current, opened) && initial.is_none_or(|initial| same(initial, opened)))
+    Ok(crate::filesystem::same_file(&current, opened)
+        && initial.is_none_or(|initial| crate::filesystem::same_file(initial, opened)))
 }
 
 #[cfg(windows)]
@@ -3147,13 +2913,7 @@ fn capture_plan_identity(_path: &Path) -> Result<PlanOpenIdentity> {
 
 #[cfg(windows)]
 fn open_plan_identity_file(path: &Path) -> Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
+    crate::filesystem::open_reparse_point(path)
         .map_err(|error| user_path_err("read_mods_plan", error.to_string(), path, false))
 }
 
@@ -3167,57 +2927,8 @@ fn validate_plan_identity_handle(path: &Path, file: &File) -> Result<()> {
 
 #[cfg(windows)]
 fn windows_file_identity(file: &File, path: &Path) -> Result<(u32, u64)> {
-    use std::os::windows::io::AsRawHandle;
-
-    #[derive(Clone, Copy, Default)]
-    #[repr(C)]
-    struct WindowsFileTime {
-        low_date_time: u32,
-        high_date_time: u32,
-    }
-
-    #[derive(Clone, Copy, Default)]
-    #[repr(C)]
-    struct WindowsFileInformation {
-        file_attributes: u32,
-        creation_time: WindowsFileTime,
-        last_access_time: WindowsFileTime,
-        last_write_time: WindowsFileTime,
-        volume_serial_number: u32,
-        file_size_high: u32,
-        file_size_low: u32,
-        number_of_links: u32,
-        file_index_high: u32,
-        file_index_low: u32,
-    }
-
-    #[link(name = "kernel32")]
-    extern "system" {
-        #[link_name = "GetFileInformationByHandle"]
-        fn get_file_information_by_handle(
-            file: *mut std::ffi::c_void,
-            information: *mut WindowsFileInformation,
-        ) -> i32;
-    }
-
-    let mut information = WindowsFileInformation::default();
-    // SAFETY: `file` owns a valid handle and `information` points to a fully
-    // allocated structure with the layout required by Win32.
-    let result = unsafe {
-        get_file_information_by_handle(file.as_raw_handle(), std::ptr::addr_of_mut!(information))
-    };
-    if result == 0 {
-        return Err(user_path_err(
-            "inspect_mods_artifact",
-            std::io::Error::last_os_error().to_string(),
-            path,
-            true,
-        ));
-    }
-    Ok((
-        information.volume_serial_number,
-        (u64::from(information.file_index_high) << 32) | u64::from(information.file_index_low),
-    ))
+    crate::filesystem::file_identity(file)
+        .map_err(|error| user_path_err("inspect_mods_artifact", error.to_string(), path, true))
 }
 
 fn join_relative(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -3240,21 +2951,8 @@ fn join_relative(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(root.join(path))
 }
 
-fn sibling_path(path: &Path, kind: &str, operation_id: &str) -> PathBuf {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
-    path.with_file_name(format!("{name}.{kind}-{operation_id}"))
-}
-
 fn validate_operation_id(operation_id: &str) -> Result<()> {
-    if operation_id.is_empty()
-        || operation_id.len() > 96
-        || !operation_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
+    if !is_safe_operation_id(operation_id) {
         return Err(internal_err(
             "invalid_operation_id",
             "StarVault could not prepare the Mods deployment",

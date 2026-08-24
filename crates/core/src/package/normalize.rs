@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{pkg_err, Result};
+use crate::filesystem::is_link_or_reparse as is_link_or_reparse_point;
 use crate::package::container;
 use crate::package::metadata::{LegacyMetadata, SlotGuess};
 
@@ -379,19 +380,6 @@ fn collect_files(root: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
-}
-
-#[cfg(windows)]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link_or_reparse_point(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 fn common_container_parent(containers: &BTreeMap<PathBuf, bool>) -> PathBuf {

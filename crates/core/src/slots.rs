@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::StrategyChoice;
 use crate::error::{internal_err, package_err, user_path_err, Result};
+use crate::filesystem::{
+    is_link_or_reparse as is_link, is_safe_operation_id, operation_sibling as sibling_path,
+};
 use crate::layout::{SlotId, WindowsLayout, SLOT_OWNED_SIBLINGS};
 use crate::operation::{SlotOperationJournal, SlotOperationPaths, SlotStateBinding, SlotStateKind};
 use crate::store::{PackageManifest, Store};
@@ -44,7 +47,6 @@ enum StateReceipt {
 #[derive(Debug, Clone)]
 pub struct PreparedSlotTransition {
     change: SlotChange,
-    repair: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +85,13 @@ impl<'a> SlotManager<'a> {
         operation_id: &str,
     ) -> Result<PreparedSlotTransition> {
         validate_operation_id(operation_id)?;
-        self.verify_current(previous)?;
+        if target.is_none() {
+            self.verify_owned_for_restore(previous.ok_or_else(|| {
+                package_err("slot_drift", "restore has no active campaign deployment")
+            })?)?;
+        } else {
+            self.verify_current(previous)?;
+        }
 
         let live = self.layout.campaign_dir();
         let plain = self.layout.plain_campaign_dir();
@@ -120,59 +128,6 @@ impl<'a> SlotManager<'a> {
                 previous_state,
                 target_state,
             },
-            repair: false,
-        })
-    }
-
-    pub fn prepare_repair(
-        &self,
-        manifest: &PackageManifest,
-        operation_id: &str,
-    ) -> Result<PreparedSlotTransition> {
-        validate_operation_id(operation_id)?;
-        let live = self.layout.campaign_dir();
-        let plain = self.layout.plain_campaign_dir();
-        ensure_real_directory(&plain, "preserved plain campaign directory")?;
-        let metadata = std::fs::symlink_metadata(&live).map_err(|error| {
-            user_path_err("inspect_campaign_root", error.to_string(), &live, true)
-        })?;
-        if is_link(&metadata) {
-            let deployed = self
-                .store
-                .deploy_dir(manifest.faction, &manifest.revision)?;
-            verify_link_target(&live, &deployed)?;
-        } else if !metadata.is_dir() {
-            return Err(package_err(
-                "slot_drift",
-                "Maps/Campaign is neither an owned junction nor a campaign directory",
-            ));
-        }
-        let staging = sibling_path(&live, "staging", operation_id);
-        let backup = sibling_path(&live, "backup", operation_id);
-        ensure_absent(&staging)?;
-        ensure_absent(&backup)?;
-
-        let previous_state = capture_state(manifest.faction, &live)?;
-        // Repair never mutates a deployment cache that may still be the live
-        // junction target. It stages an independent verified real tree.
-        self.store.materialize_campaign(manifest, &staging)?;
-        verify_campaign_tree(&staging, manifest)?;
-        let target_state = capture_state(manifest.faction, &staging)?;
-
-        Ok(PreparedSlotTransition {
-            change: SlotChange {
-                paths: SlotOperationPaths {
-                    faction: manifest.faction,
-                    live,
-                    staging,
-                    backup,
-                },
-                previous: Some(manifest.clone()),
-                expected: Some(manifest.clone()),
-                previous_state,
-                target_state,
-            },
-            repair: true,
         })
     }
 
@@ -284,9 +239,8 @@ impl<'a> SlotManager<'a> {
                     }
                     Ok(())
                 } else if metadata.is_dir() {
-                    // Explicit copy mode and repaired campaigns use a real
-                    // directory. They remain supported, but the normal path is
-                    // one root junction.
+                    // Explicit copy mode uses a real directory; the normal
+                    // path is one root junction.
                     verify_campaign_tree(&live, manifest)
                 } else {
                     Err(package_err(
@@ -295,6 +249,42 @@ impl<'a> SlotManager<'a> {
                     ))
                 }
             }
+        }
+    }
+
+    fn verify_owned_for_restore(&self, manifest: &PackageManifest) -> Result<()> {
+        let live = self.layout.campaign_dir();
+        ensure_real_directory(
+            &self.layout.plain_campaign_dir(),
+            "preserved plain campaign directory",
+        )?;
+        let metadata = std::fs::symlink_metadata(&live).map_err(|error| {
+            user_path_err("inspect_campaign_root", error.to_string(), &live, true)
+        })?;
+        if is_link(&metadata) {
+            verify_link_target(
+                &live,
+                &self
+                    .store
+                    .deploy_dir(manifest.faction, &manifest.revision)?,
+            )
+        } else if metadata.is_dir() {
+            if inventory_tree(&live, true)?
+                .values()
+                .any(|entry| matches!(entry, TreeEntry::Link { .. }))
+            {
+                Err(package_err(
+                    "slot_drift",
+                    "Maps/Campaign contains an external link",
+                ))
+            } else {
+                Ok(())
+            }
+        } else {
+            Err(package_err(
+                "slot_drift",
+                "Maps/Campaign is neither an owned junction nor a campaign directory",
+            ))
         }
     }
 
@@ -310,9 +300,9 @@ impl<'a> SlotManager<'a> {
 impl PreparedSlotTransition {
     pub fn journal_paths(&self) -> SlotOperationJournal {
         SlotOperationJournal::new(
-            vec![self.change.paths.clone()],
-            vec![self.change.previous_state.clone()],
-            vec![self.change.target_state.clone()],
+            self.change.paths.clone(),
+            Some(self.change.previous_state.clone()),
+            Some(self.change.target_state.clone()),
         )
     }
 
@@ -337,15 +327,11 @@ impl PreparedSlotTransition {
     }
 
     pub fn rollback(&self) -> Result<()> {
-        if self.repair {
-            rollback_repair_paths_checked(&self.journal_paths(), self.change.expected.as_ref())
-        } else {
-            rollback_paths_checked(
-                &self.journal_paths(),
-                self.change.previous.as_ref(),
-                self.change.expected.as_ref(),
-            )
-        }
+        rollback_paths_checked(
+            &self.journal_paths(),
+            self.change.previous.as_ref(),
+            self.change.expected.as_ref(),
+        )
     }
 
     pub fn finalize(&self) -> Result<()> {
@@ -391,7 +377,7 @@ pub(crate) fn commit_paths(
     target_present: bool,
 ) -> Result<()> {
     validate_journal_bindings(journal, true)?;
-    let paths = only_paths(journal)?;
+    let paths = &journal.paths;
     let previous = previous_binding_for(journal, paths)?;
     let target = target_binding_for(journal, paths)?;
     let plain = plain_path(&paths.live);
@@ -427,7 +413,7 @@ pub fn verify_rollback_paths_checked(
     target: Option<&PackageManifest>,
 ) -> Result<()> {
     validate_journal_bindings(journal, true)?;
-    let paths = only_paths(journal)?;
+    let paths = &journal.paths;
     let previous_state = previous_binding_for(journal, paths)?;
     let target_state = target_binding_for(journal, paths)?;
     let plain = plain_path(&paths.live);
@@ -462,7 +448,7 @@ pub fn rollback_paths_checked(
     target: Option<&PackageManifest>,
 ) -> Result<()> {
     verify_rollback_paths_checked(journal, previous, target)?;
-    let paths = only_paths(journal)?;
+    let paths = &journal.paths;
     let previous_state = previous_binding_for(journal, paths)?;
     let target_state = target_binding_for(journal, paths)?;
     let plain = plain_path(&paths.live);
@@ -486,29 +472,13 @@ pub fn rollback_paths_checked(
     verify_state_at(&paths.live, previous_state)
 }
 
-pub fn verify_repair_rollback_paths(
-    journal: &SlotOperationJournal,
-    target: Option<&PackageManifest>,
-) -> Result<()> {
-    verify_rollback_paths_checked(journal, target, target)
-}
-
-pub fn rollback_repair_paths_checked(
-    journal: &SlotOperationJournal,
-    target: Option<&PackageManifest>,
-) -> Result<()> {
-    rollback_paths_checked(journal, target, target)
-}
-
 /// Preparation cleanup. A preparing journal has no state bindings and slot
 /// apply has not started, so only deterministic staging paths may exist.
 pub fn finalize_paths(journal: &SlotOperationJournal) -> Result<()> {
     let mut first_error = None;
-    for paths in journal {
-        for artifact in [&paths.staging, &paths.backup] {
-            if let Err(error) = remove_entry_if_exists(artifact) {
-                first_error.get_or_insert(error);
-            }
+    for artifact in [&journal.paths.staging, &journal.paths.backup] {
+        if let Err(error) = remove_entry_if_exists(artifact) {
+            first_error.get_or_insert(error);
         }
     }
     match first_error {
@@ -519,7 +489,7 @@ pub fn finalize_paths(journal: &SlotOperationJournal) -> Result<()> {
 
 pub(crate) fn verify_finalize_bound_paths(journal: &SlotOperationJournal) -> Result<()> {
     validate_journal_bindings(journal, true)?;
-    let paths = only_paths(journal)?;
+    let paths = &journal.paths;
     if path_exists(&paths.staging)? {
         verify_state_at(&paths.staging, target_binding_for(journal, paths)?)?;
     }
@@ -530,7 +500,7 @@ pub(crate) fn verify_finalize_bound_paths(journal: &SlotOperationJournal) -> Res
 }
 
 pub(crate) fn finalize_preverified_paths(journal: &SlotOperationJournal) -> Result<()> {
-    let paths = only_paths(journal)?;
+    let paths = &journal.paths;
     remove_entry_if_exists(&paths.staging)?;
     remove_entry_if_exists(&paths.backup)
 }
@@ -539,14 +509,8 @@ pub(crate) fn validate_journal_bindings(
     journal: &SlotOperationJournal,
     require_complete: bool,
 ) -> Result<()> {
-    if journal.len() != 1 {
-        return Err(package_err(
-            "unsafe_operation_journal",
-            "operation journal must contain exactly one campaign-root path",
-        ));
-    }
     if !require_complete {
-        return if journal.previous_states().is_empty() && journal.target_states().is_empty() {
+        return if journal.previous_state().is_none() && journal.target_state().is_none() {
             Ok(())
         } else {
             Err(package_err(
@@ -555,13 +519,13 @@ pub(crate) fn validate_journal_bindings(
             ))
         };
     }
-    if journal.previous_states().len() != 1 || journal.target_states().len() != 1 {
+    if journal.previous_state().is_none() || journal.target_state().is_none() {
         return Err(package_err(
             "unsafe_operation_journal",
             "operation journal has incomplete campaign-root state identities",
         ));
     }
-    let paths = only_paths(journal)?;
+    let paths = &journal.paths;
     for binding in [
         previous_binding_for(journal, paths)?,
         target_binding_for(journal, paths)?,
@@ -577,41 +541,32 @@ pub(crate) fn validate_journal_bindings(
     Ok(())
 }
 
-fn only_paths(journal: &SlotOperationJournal) -> Result<&SlotOperationPaths> {
-    journal.first().ok_or_else(|| {
-        package_err(
-            "unsafe_operation_journal",
-            "operation journal is missing the campaign-root path",
-        )
-    })
-}
-
 fn previous_binding_for<'a>(
     journal: &'a SlotOperationJournal,
     paths: &SlotOperationPaths,
 ) -> Result<&'a SlotStateBinding> {
-    binding_for(journal.previous_states(), paths, "previous")
+    binding_for(journal.previous_state(), paths, "previous")
 }
 
 fn target_binding_for<'a>(
     journal: &'a SlotOperationJournal,
     paths: &SlotOperationPaths,
 ) -> Result<&'a SlotStateBinding> {
-    binding_for(journal.target_states(), paths, "target")
+    binding_for(journal.target_state(), paths, "target")
 }
 
 fn binding_for<'a>(
-    bindings: &'a [SlotStateBinding],
+    binding: Option<&'a SlotStateBinding>,
     paths: &SlotOperationPaths,
     label: &str,
 ) -> Result<&'a SlotStateBinding> {
-    let binding = bindings.first().ok_or_else(|| {
+    let binding = binding.ok_or_else(|| {
         package_err(
             "unsafe_operation_journal",
             format!("operation journal is missing the {label} campaign-root state"),
         )
     })?;
-    if bindings.len() != 1 || binding.faction != paths.faction {
+    if binding.faction != paths.faction {
         return Err(package_err(
             "unsafe_operation_journal",
             format!("operation journal has an invalid {label} campaign-root state"),
@@ -964,21 +919,8 @@ fn plain_path(live: &Path) -> PathBuf {
     live.with_file_name("Campaign.starvault-plain")
 }
 
-fn sibling_path(path: &Path, kind: &str, operation_id: &str) -> PathBuf {
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
-    path.with_file_name(format!("{name}.{kind}-{operation_id}"))
-}
-
 fn validate_operation_id(operation_id: &str) -> Result<()> {
-    if !operation_id.is_empty()
-        && operation_id.len() <= 96
-        && operation_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
+    if is_safe_operation_id(operation_id) {
         Ok(())
     } else {
         Err(package_err(
@@ -1122,19 +1064,6 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
     hex::encode(Sha256::digest(bytes))
-}
-
-#[cfg(windows)]
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-
-    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
-#[cfg(not(windows))]
-fn is_link(metadata: &std::fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
 
 #[cfg(windows)]
