@@ -16,6 +16,8 @@ const TEMPORARY_PREFIX: &str = ".mods-copy-";
 const APPLY_STARTED: &str = ".apply-started";
 const APPLY_COMPLETE: &str = ".apply-complete";
 const MAX_PLAN_BYTES: u64 = 64 * 1024 * 1024;
+const RETRY_ATTEMPTS: usize = 8;
+const RETRY_BASE_MS: u64 = 25;
 
 #[cfg(windows)]
 type PlanOpenIdentity = File;
@@ -52,12 +54,33 @@ struct ModsPlan {
     /// once the activation commits.
     #[serde(default)]
     replaced_external: Vec<RepairOriginal>,
+    /// Complete top-level `.SC2Mod` files or directories that can be renamed
+    /// from the sibling staging tree instead of copied a second time.
+    #[serde(default)]
+    atomic_units: Vec<AtomicModUnit>,
+    /// Complete live `.SC2Mod` files or directories moved into the operation
+    /// backup when apply starts. Rollback renames them back into place.
+    #[serde(default)]
+    backup_units: Vec<AtomicModUnit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct RepairOriginal {
     path: String,
     sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum AtomicModUnitKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct AtomicModUnit {
+    path: String,
+    kind: AtomicModUnitKind,
 }
 
 impl PreparedModsTransition {
@@ -86,9 +109,52 @@ impl PreparedModsTransition {
         operation_id: &str,
         external_policy: ExternalModsPolicy,
     ) -> Result<Self> {
+        Self::prepare_with_policy_and_verification(
+            store,
+            mods_root,
+            previous,
+            target,
+            operation_id,
+            external_policy,
+            true,
+        )
+    }
+
+    pub(crate) fn prepare_preverified_with_policy(
+        store: &Store,
+        mods_root: &Path,
+        previous: &[ManagedMod],
+        target: Option<&PackageManifest>,
+        operation_id: &str,
+        external_policy: ExternalModsPolicy,
+    ) -> Result<Self> {
+        Self::prepare_with_policy_and_verification(
+            store,
+            mods_root,
+            previous,
+            target,
+            operation_id,
+            external_policy,
+            false,
+        )
+    }
+
+    fn prepare_with_policy_and_verification(
+        store: &Store,
+        mods_root: &Path,
+        previous: &[ManagedMod],
+        target: Option<&PackageManifest>,
+        operation_id: &str,
+        external_policy: ExternalModsPolicy,
+        verify_contents: bool,
+    ) -> Result<Self> {
         validate_operation_id(operation_id)?;
         verify_mods_root(mods_root)?;
-        verify_managed(mods_root, previous)?;
+        if verify_contents {
+            verify_managed(mods_root, previous)?;
+        } else {
+            verify_managed_shape(mods_root, previous)?;
+        }
         let staging = sibling_path(mods_root, "staging", operation_id);
         let backup = sibling_path(mods_root, "backup", operation_id);
         ensure_absent(&staging)?;
@@ -116,6 +182,8 @@ impl PreparedModsTransition {
             if let Some(target) = target {
                 store.materialize_mods(target, &staging)?;
             }
+            let (backup_units, atomic_units) =
+                plan_atomic_units(mods_root, previous, &target_rows, &replaced_external)?;
             let target_by_key: BTreeMap<String, &ManagedMod> = target_rows
                 .iter()
                 .map(|managed| (key(&managed.path), managed))
@@ -123,6 +191,12 @@ impl PreparedModsTransition {
             let mut backed_up = Vec::new();
             for managed in previous {
                 if managed.disposition != ManagedModDisposition::Created {
+                    continue;
+                }
+                if backup_units
+                    .iter()
+                    .any(|unit| atomic_unit_contains(&unit.path, &managed.path))
+                {
                     continue;
                 }
                 let changed = target_by_key
@@ -152,6 +226,8 @@ impl PreparedModsTransition {
                 repair: false,
                 repair_originals: Vec::new(),
                 replaced_external,
+                atomic_units,
+                backup_units,
             };
             persist_plan(&backup, &plan)?;
             let plan_path = backup.join(PLAN_FILE);
@@ -273,6 +349,8 @@ impl PreparedModsTransition {
                 repair: true,
                 repair_originals: originals,
                 replaced_external: Vec::new(),
+                atomic_units: Vec::new(),
+                backup_units: Vec::new(),
             };
             persist_plan(&backup, &plan)?;
             let plan_path = backup.join(PLAN_FILE);
@@ -323,7 +401,7 @@ impl PreparedModsTransition {
     }
 
     fn apply_standard(&self) -> Result<()> {
-        verify_managed(&self.mods_root, &self.plan.previous)?;
+        verify_managed_shape(&self.mods_root, &self.plan.previous)?;
         for original in &self.plan.replaced_external {
             let expected = original.sha256.as_deref().ok_or_else(|| {
                 internal_err(
@@ -335,6 +413,9 @@ impl PreparedModsTransition {
             let path = join_relative(&self.mods_root, &original.path)?;
             remove_managed_regular_if_hash(&self.mods_root, &path, expected)?;
             prune_empty_parents(path.parent(), &self.mods_root)?;
+        }
+        for unit in &self.plan.backup_units {
+            move_live_unit_to_backup(&self.mods_root, &self.backup, unit, &self.plan.previous)?;
         }
         let target_by_key: BTreeMap<String, &ManagedMod> = self
             .plan
@@ -353,12 +434,23 @@ impl PreparedModsTransition {
                     .get(&key(&managed.path))
                     .is_none_or(|target| target.sha256 != managed.sha256)
             })
+            .filter(|managed| {
+                !self
+                    .plan
+                    .backup_units
+                    .iter()
+                    .any(|unit| atomic_unit_contains(&unit.path, &managed.path))
+            })
             .collect();
         previous_created.sort_by_key(|managed| std::cmp::Reverse(path_depth(&managed.path)));
         for managed in previous_created {
             let path = join_relative(&self.mods_root, &managed.path)?;
             remove_managed_regular_if_hash(&self.mods_root, &path, &managed.sha256)?;
             prune_empty_parents(path.parent(), &self.mods_root)?;
+        }
+
+        for unit in &self.plan.atomic_units {
+            move_atomic_unit(&self.staging, &self.mods_root, unit, &self.plan.target)?;
         }
 
         for managed in &self.plan.target {
@@ -370,7 +462,15 @@ impl PreparedModsTransition {
             let unchanged = previous.is_some_and(|previous| {
                 previous.sha256 == managed.sha256 && previous.disposition == managed.disposition
             });
-            if managed.disposition == ManagedModDisposition::Borrowed || unchanged {
+            let moved_atomically = self
+                .plan
+                .atomic_units
+                .iter()
+                .any(|unit| atomic_unit_contains(&unit.path, &managed.path));
+            if managed.disposition == ManagedModDisposition::Borrowed
+                || unchanged
+                || moved_atomically
+            {
                 continue;
             }
             let source = join_relative(&self.staging, &managed.path)?;
@@ -440,7 +540,7 @@ pub fn rollback_from_paths(mods_root: &Path, backup: &Path, staging: &Path) -> R
 pub(crate) fn rollback_from_paths_preserving(
     mods_root: &Path,
     backup: &Path,
-    _staging: &Path,
+    staging: &Path,
 ) -> Result<()> {
     verify_mods_root(mods_root)?;
     match backup.symlink_metadata() {
@@ -456,7 +556,7 @@ pub(crate) fn rollback_from_paths_preserving(
         }
     }
     let plan = load_plan(backup)?;
-    rollback_from_plan_preserving(mods_root, backup, &plan)
+    rollback_from_plan_preserving(mods_root, backup, staging, &plan)
 }
 
 /// Restore from the exact Mods plan bound into the atomic operation journal.
@@ -465,15 +565,20 @@ pub(crate) fn rollback_from_paths_preserving(
 pub(crate) fn rollback_from_paths_preserving_bound(
     mods_root: &Path,
     backup: &Path,
-    _staging: &Path,
+    staging: &Path,
     expected_sha256: &str,
 ) -> Result<()> {
     verify_mods_root(mods_root)?;
     let plan = load_plan_bound(backup, expected_sha256)?;
-    rollback_from_plan_preserving(mods_root, backup, &plan)
+    rollback_from_plan_preserving(mods_root, backup, staging, &plan)
 }
 
-fn rollback_from_plan_preserving(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Result<()> {
+fn rollback_from_plan_preserving(
+    mods_root: &Path,
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+) -> Result<()> {
     if !artifact_file_exists(backup, APPLY_STARTED)? {
         if plan.repair {
             verify_repair_originals(mods_root, plan)?;
@@ -483,10 +588,11 @@ fn rollback_from_plan_preserving(mods_root: &Path, backup: &Path, plan: &ModsPla
         }
         return Ok(());
     }
-    verify_rollback_plan(mods_root, backup, plan)?;
+    verify_rollback_plan(mods_root, backup, staging, plan)?;
     if plan.repair {
         return rollback_repair_preserving(mods_root, backup, plan);
     }
+    rollback_atomic_target_units(mods_root, backup, staging, plan)?;
     let previous_by_key: BTreeMap<String, &ManagedMod> = plan
         .previous
         .iter()
@@ -500,6 +606,12 @@ fn rollback_from_plan_preserving(mods_root: &Path, backup: &Path, plan: &ModsPla
             previous_by_key
                 .get(&key(&managed.path))
                 .is_none_or(|previous| previous.sha256 != managed.sha256)
+        })
+        .filter(|managed| {
+            !plan
+                .atomic_units
+                .iter()
+                .any(|unit| atomic_unit_contains(&unit.path, &managed.path))
         })
         .collect();
     target_created.sort_by_key(|managed| std::cmp::Reverse(path_depth(&managed.path)));
@@ -582,13 +694,185 @@ fn rollback_from_plan_preserving(mods_root: &Path, backup: &Path, plan: &ModsPla
             &original.path,
         )?;
     }
+    restore_atomic_backup_units(mods_root, backup, plan)?;
     verify_managed(mods_root, &plan.previous)?;
     verify_external_originals(mods_root, &plan.replaced_external)?;
     Ok(())
 }
 
+fn rollback_atomic_target_units(
+    mods_root: &Path,
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+) -> Result<()> {
+    for unit in &plan.atomic_units {
+        if classify_atomic_target_rollback(mods_root, backup, staging, plan, unit)?
+            == AtomicTargetRollbackState::TargetLive
+        {
+            rename_mods_with_retry(
+                &join_relative(mods_root, &unit.path)?,
+                &join_relative(staging, &unit.path)?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtomicTargetRollbackState {
+    PreviousLive,
+    TargetLive,
+    TargetStaged,
+}
+
+fn classify_atomic_target_rollback(
+    mods_root: &Path,
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+    unit: &AtomicModUnit,
+) -> Result<AtomicTargetRollbackState> {
+    let target_rows = rows_in_unit(&plan.target, unit);
+    let replaces_previous = plan
+        .backup_units
+        .iter()
+        .any(|candidate| key(&candidate.path) == key(&unit.path));
+    let backup_present = replaces_previous
+        && !entry_is_absent(&join_relative(&backup.join(BACKUP_FILES), &unit.path)?)?;
+    let live_present = !entry_is_absent(&join_relative(mods_root, &unit.path)?)?;
+    let staged_present = !entry_is_absent(&join_relative(staging, &unit.path)?)?;
+
+    if replaces_previous && !backup_present {
+        let previous_rows = rows_in_unit(&plan.previous, unit);
+        if live_present
+            && staged_present
+            && atomic_unit_tree_matches(mods_root, unit, &previous_rows)?
+            && atomic_unit_tree_matches(staging, unit, &target_rows)?
+        {
+            verify_managed(mods_root, &owned_rows(&previous_rows))?;
+            return Ok(AtomicTargetRollbackState::PreviousLive);
+        }
+    } else if live_present && !staged_present {
+        if atomic_unit_tree_matches(mods_root, unit, &target_rows)? {
+            verify_managed(mods_root, &owned_rows(&target_rows))?;
+            return Ok(AtomicTargetRollbackState::TargetLive);
+        }
+        return Err(package_err(
+            "managed_file_changed",
+            format!("managed Mods container `{}` changed", unit.path),
+        ));
+    } else if !live_present && staged_present {
+        if atomic_unit_tree_matches(staging, unit, &target_rows)? {
+            return Ok(AtomicTargetRollbackState::TargetStaged);
+        }
+        return Err(package_err(
+            "unsafe_operation_artifact",
+            format!("staged Mods container `{}` changed", unit.path),
+        ));
+    }
+
+    Err(package_err(
+        "recovery_required",
+        format!(
+            "Mods container `{}` has an ambiguous rollback state",
+            unit.path
+        ),
+    ))
+}
+
+fn restore_atomic_backup_units(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Result<()> {
+    let backup_files = backup.join(BACKUP_FILES);
+    for unit in &plan.backup_units {
+        if classify_atomic_backup_rollback(mods_root, backup, plan, unit)?
+            == AtomicBackupRollbackState::BackedUp
+        {
+            rename_mods_with_retry(
+                &join_relative(&backup_files, &unit.path)?,
+                &join_relative(mods_root, &unit.path)?,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AtomicBackupRollbackState {
+    PreviousLive,
+    BackedUp,
+}
+
+fn classify_atomic_backup_rollback(
+    mods_root: &Path,
+    backup: &Path,
+    plan: &ModsPlan,
+    unit: &AtomicModUnit,
+) -> Result<AtomicBackupRollbackState> {
+    let backup_files = backup.join(BACKUP_FILES);
+    let previous_rows = rows_in_unit(&plan.previous, unit);
+    let source_present = !entry_is_absent(&join_relative(&backup_files, &unit.path)?)?;
+    if source_present {
+        if !atomic_unit_tree_matches(&backup_files, unit, &previous_rows)? {
+            return Err(package_err(
+                "recovery_required",
+                format!("backup of Mods container `{}` changed", unit.path),
+            ));
+        }
+        verify_managed(&backup_files, &owned_rows(&previous_rows))?;
+        let live_present = !entry_is_absent(&join_relative(mods_root, &unit.path)?)?;
+        let target_occupies_live = plan
+            .atomic_units
+            .iter()
+            .any(|target| key(&target.path) == key(&unit.path));
+        if live_present && !target_occupies_live {
+            return Err(package_err(
+                "managed_file_changed",
+                format!("Mods restore target `{}` became occupied", unit.path),
+            ));
+        }
+        return Ok(AtomicBackupRollbackState::BackedUp);
+    }
+
+    if atomic_unit_tree_matches(mods_root, unit, &previous_rows)? {
+        verify_managed(mods_root, &owned_rows(&previous_rows))?;
+        Ok(AtomicBackupRollbackState::PreviousLive)
+    } else {
+        Err(package_err(
+            "recovery_required",
+            format!("previous Mods container `{}` is missing", unit.path),
+        ))
+    }
+}
+
+fn verify_atomic_rollback_plan(
+    mods_root: &Path,
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+) -> Result<()> {
+    for unit in &plan.atomic_units {
+        classify_atomic_target_rollback(mods_root, backup, staging, plan, unit)?;
+    }
+
+    for unit in &plan.backup_units {
+        classify_atomic_backup_rollback(mods_root, backup, plan, unit)?;
+    }
+    Ok(())
+}
+
+fn rows_in_unit<'a>(managed: &'a [ManagedMod], unit: &AtomicModUnit) -> Vec<&'a ManagedMod> {
+    managed
+        .iter()
+        .filter(|managed| atomic_unit_contains(&unit.path, &managed.path))
+        .collect()
+}
+
+fn owned_rows(rows: &[&ManagedMod]) -> Vec<ManagedMod> {
+    rows.iter().map(|managed| (*managed).clone()).collect()
+}
+
 /// Check that a Mods rollback can proceed without mutating either tree.
-pub fn verify_rollback_from_paths(mods_root: &Path, backup: &Path) -> Result<()> {
+pub fn verify_rollback_from_paths(mods_root: &Path, backup: &Path, staging: &Path) -> Result<()> {
     verify_mods_root(mods_root)?;
     match backup.symlink_metadata() {
         Ok(_) => {}
@@ -603,7 +887,7 @@ pub fn verify_rollback_from_paths(mods_root: &Path, backup: &Path) -> Result<()>
         }
     }
     let plan = load_plan(backup)?;
-    verify_rollback_from_plan(mods_root, backup, &plan)
+    verify_rollback_from_plan(mods_root, backup, staging, &plan)
 }
 
 /// Verify rollback using the exact plan digest stored in the atomic operation
@@ -611,14 +895,20 @@ pub fn verify_rollback_from_paths(mods_root: &Path, backup: &Path) -> Result<()>
 pub(crate) fn verify_rollback_from_paths_bound(
     mods_root: &Path,
     backup: &Path,
+    staging: &Path,
     expected_sha256: &str,
 ) -> Result<()> {
     verify_mods_root(mods_root)?;
-    let plan = load_plan_bound(backup, expected_sha256)?;
-    verify_rollback_from_plan(mods_root, backup, &plan)
+    let plan = verify_bound_backup(backup, expected_sha256)?;
+    verify_rollback_from_plan(mods_root, backup, staging, &plan)
 }
 
-fn verify_rollback_from_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Result<()> {
+fn verify_rollback_from_plan(
+    mods_root: &Path,
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+) -> Result<()> {
     if !artifact_file_exists(backup, APPLY_STARTED)? {
         return if plan.repair {
             verify_repair_originals(mods_root, plan)
@@ -627,7 +917,7 @@ fn verify_rollback_from_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -
             verify_external_originals(mods_root, &plan.replaced_external)
         };
     }
-    verify_rollback_plan(mods_root, backup, plan)
+    verify_rollback_plan(mods_root, backup, staging, plan)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -636,7 +926,12 @@ enum RollbackTarget {
     Target,
 }
 
-fn verify_rollback_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Result<()> {
+fn verify_rollback_plan(
+    mods_root: &Path,
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+) -> Result<()> {
     if plan.repair {
         for managed in plan
             .target
@@ -672,6 +967,8 @@ fn verify_rollback_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Res
         return Ok(());
     }
 
+    verify_atomic_rollback_plan(mods_root, backup, staging, plan)?;
+
     let previous_by_key: BTreeMap<String, &ManagedMod> = plan
         .previous
         .iter()
@@ -685,6 +982,12 @@ fn verify_rollback_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Res
             previous_by_key
                 .get(&key(&managed.path))
                 .is_none_or(|previous| previous.sha256 != managed.sha256)
+        })
+        .filter(|managed| {
+            !plan
+                .atomic_units
+                .iter()
+                .any(|unit| atomic_unit_contains(&unit.path, &managed.path))
         })
     {
         let path = join_relative(mods_root, &managed.path)?;
@@ -733,6 +1036,12 @@ fn verify_rollback_plan(mods_root: &Path, backup: &Path, plan: &ModsPlan) -> Res
         .previous
         .iter()
         .filter(|managed| !backed_up.contains(&key(&managed.path)))
+        .filter(|managed| {
+            !plan
+                .backup_units
+                .iter()
+                .any(|unit| atomic_unit_contains(&unit.path, &managed.path))
+        })
     {
         verify_managed(mods_root, std::slice::from_ref(previous))?;
     }
@@ -1022,13 +1331,13 @@ pub fn finalize_paths(backup: &Path, staging: &Path) -> Result<()> {
 }
 
 fn finalize_paths_bound(backup: &Path, staging: &Path, expected_plan_sha256: &str) -> Result<()> {
-    verify_finalize_paths_bound(backup, staging, expected_plan_sha256)?;
+    verify_committed_finalize_paths_bound(backup, staging, expected_plan_sha256)?;
     finalize_preverified_paths(backup, staging)
 }
 
 /// Remove artifacts after the workflow globally verified every cleanup tree.
-/// The caller must hold the mutation lock and call `verify_finalize_paths_bound`
-/// immediately before this function.
+/// The caller must hold the mutation lock and call the matching committed or
+/// rollback finalize verifier immediately before this function.
 pub(crate) fn finalize_preverified_paths(backup: &Path, staging: &Path) -> Result<()> {
     if operation_artifact_exists(staging)? {
         remove_entry(staging)?;
@@ -1039,10 +1348,27 @@ pub(crate) fn finalize_preverified_paths(backup: &Path, staging: &Path) -> Resul
     Ok(())
 }
 
-pub(crate) fn verify_finalize_paths_bound(
+pub(crate) fn verify_committed_finalize_paths_bound(
     backup: &Path,
     staging: &Path,
     expected_plan_sha256: &str,
+) -> Result<()> {
+    verify_finalize_paths_bound(backup, staging, expected_plan_sha256, true)
+}
+
+pub(crate) fn verify_rollback_finalize_paths_bound(
+    backup: &Path,
+    staging: &Path,
+    expected_plan_sha256: &str,
+) -> Result<()> {
+    verify_finalize_paths_bound(backup, staging, expected_plan_sha256, false)
+}
+
+fn verify_finalize_paths_bound(
+    backup: &Path,
+    staging: &Path,
+    expected_plan_sha256: &str,
+    committed: bool,
 ) -> Result<()> {
     let backup_exists = operation_artifact_exists(backup)?;
     let staging_exists = operation_artifact_exists(staging)?;
@@ -1060,14 +1386,85 @@ pub(crate) fn verify_finalize_paths_bound(
     if staging_exists {
         verify_staging_tree(staging, &plan.target)?;
     }
+    verify_atomic_cleanup_state(backup, staging, &plan, committed)?;
+    Ok(())
+}
+
+fn verify_atomic_cleanup_state(
+    backup: &Path,
+    staging: &Path,
+    plan: &ModsPlan,
+    committed: bool,
+) -> Result<()> {
+    let backup_files = backup.join(BACKUP_FILES);
+    for unit in &plan.backup_units {
+        let present = !entry_is_absent(&join_relative(&backup_files, &unit.path)?)?;
+        if present != committed {
+            return Err(package_err(
+                "unsafe_operation_artifact",
+                format!(
+                    "Mods backup container `{}` is in the wrong cleanup state",
+                    unit.path
+                ),
+            ));
+        }
+        if present {
+            let rows = rows_in_unit(&plan.previous, unit);
+            if !atomic_unit_tree_matches(&backup_files, unit, &rows)? {
+                return Err(package_err(
+                    "unsafe_operation_artifact",
+                    format!("Mods backup container `{}` changed shape", unit.path),
+                ));
+            }
+        }
+    }
+    for unit in &plan.atomic_units {
+        let present = !entry_is_absent(&join_relative(staging, &unit.path)?)?;
+        if present == committed {
+            return Err(package_err(
+                "unsafe_operation_artifact",
+                format!(
+                    "staged Mods container `{}` is in the wrong cleanup state",
+                    unit.path
+                ),
+            ));
+        }
+        if present {
+            let rows = rows_in_unit(&plan.target, unit);
+            if !atomic_unit_tree_matches(staging, unit, &rows)? {
+                return Err(package_err(
+                    "unsafe_operation_artifact",
+                    format!("staged Mods container `{}` changed shape", unit.path),
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
 fn verify_bound_backup(backup: &Path, expected_plan_sha256: &str) -> Result<ModsPlan> {
     let plan = load_plan_bound(backup, expected_plan_sha256)?;
     let allowed_temporaries = present_target_temporaries(backup, &plan)?;
-    let (actual_directories, mut actual_files) =
-        inventory_operation_artifact(backup, &allowed_temporaries)?;
+    let mut optional_directories = BTreeSet::new();
+    let mut optional_files = BTreeMap::new();
+    for unit in &plan.backup_units {
+        for managed in plan
+            .previous
+            .iter()
+            .filter(|managed| atomic_unit_contains(&unit.path, &managed.path))
+        {
+            insert_expected_artifact_file(
+                &mut optional_directories,
+                &mut optional_files,
+                &format!("{BACKUP_FILES}/{}", managed.path.replace('\\', "/")),
+                "",
+            )?;
+        }
+    }
+    optional_directories.remove(&key(BACKUP_FILES));
+    let mut unhashed = allowed_temporaries.clone();
+    unhashed.extend(optional_files.keys().cloned());
+    let (actual_directories, mut actual_files) = inventory_operation_artifact(backup, &unhashed)?;
     for temporary in &allowed_temporaries {
         if actual_files.remove(temporary).is_none() {
             return Err(package_err(
@@ -1151,12 +1548,14 @@ fn verify_bound_backup(backup: &Path, expected_plan_sha256: &str) -> Result<Mods
             &sha256_bytes(b"complete"),
         )?;
     }
-    verify_expected_artifact_tree(
+    verify_expected_artifact_tree_with_optional(
         backup,
         actual_directories,
         actual_files,
         expected_directories,
         expected_files,
+        optional_directories,
+        optional_files,
     )?;
     Ok(plan)
 }
@@ -1177,13 +1576,19 @@ fn verify_staging_tree(staging: &Path, target: &[ManagedMod]) -> Result<()> {
             "",
         )?;
     }
-    verify_expected_artifact_tree(
+    let directories_are_owned = actual_directories.is_subset(&expected_directories);
+    let files_are_owned = actual_files
+        .keys()
+        .all(|path| expected_files.contains_key(path));
+    if directories_are_owned && files_are_owned {
+        return Ok(());
+    }
+    Err(user_path_err(
+        "unsafe_operation_artifact",
+        "Mods staging contains data not bound to the atomic operation journal",
         staging,
-        actual_directories,
-        actual_files,
-        expected_directories,
-        expected_files,
-    )
+        false,
+    ))
 }
 
 fn insert_expected_artifact_file(
@@ -1336,14 +1741,30 @@ fn present_target_temporaries(backup: &Path, plan: &ModsPlan) -> Result<BTreeSet
     Ok(present)
 }
 
-fn verify_expected_artifact_tree(
+fn verify_expected_artifact_tree_with_optional(
     root: &Path,
     actual_directories: BTreeSet<String>,
     actual_files: BTreeMap<String, String>,
     expected_directories: BTreeSet<String>,
     expected_files: BTreeMap<String, String>,
+    optional_directories: BTreeSet<String>,
+    optional_files: BTreeMap<String, String>,
 ) -> Result<()> {
-    if actual_directories == expected_directories && actual_files == expected_files {
+    let mandatory_directories_present = expected_directories.is_subset(&actual_directories);
+    let extra_directories_owned = actual_directories
+        .difference(&expected_directories)
+        .all(|path| optional_directories.contains(path));
+    let mandatory_files_present = expected_files
+        .iter()
+        .all(|(path, hash)| actual_files.get(path) == Some(hash));
+    let extra_files_owned = actual_files.iter().all(|(path, hash)| {
+        expected_files.contains_key(path) || optional_files.get(path) == Some(hash)
+    });
+    if mandatory_directories_present
+        && extra_directories_owned
+        && mandatory_files_present
+        && extra_files_owned
+    {
         return Ok(());
     }
     Err(user_path_err(
@@ -1638,6 +2059,326 @@ fn plan_target(
     }
     rows.sort_by_key(|managed| key(&managed.path));
     Ok((rows, replaced_external))
+}
+
+fn plan_atomic_units(
+    mods_root: &Path,
+    previous: &[ManagedMod],
+    target: &[ManagedMod],
+    replaced_external: &[RepairOriginal],
+) -> Result<(Vec<AtomicModUnit>, Vec<AtomicModUnit>)> {
+    let previous_groups = group_atomic_units(previous);
+    let target_groups = group_atomic_units(target);
+    let keys = previous_groups
+        .keys()
+        .chain(target_groups.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut backup_units = Vec::new();
+    let mut target_units = Vec::new();
+
+    for unit_key in keys {
+        let previous_group = previous_groups.get(&unit_key);
+        let target_group = target_groups.get(&unit_key);
+        let target_candidate = target_group
+            .and_then(|(path, rows)| atomic_unit_kind(path, rows).map(|kind| (path, rows, kind)))
+            .filter(|(path, rows, _)| {
+                rows.iter()
+                    .all(|managed| managed.disposition == ManagedModDisposition::Created)
+                    && !replaced_external
+                        .iter()
+                        .any(|original| atomic_unit_contains(path, &original.path))
+            });
+        let backup_candidate = if let Some((path, rows)) = previous_group {
+            if rows
+                .iter()
+                .all(|managed| managed.disposition == ManagedModDisposition::Created)
+            {
+                if let Some(kind) = atomic_unit_kind(path, rows) {
+                    let unit = AtomicModUnit {
+                        path: path.clone(),
+                        kind,
+                    };
+                    atomic_unit_tree_matches(mods_root, &unit, rows)?.then_some((path, rows, kind))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let can_backup =
+            backup_candidate.is_some() && (target_group.is_none() || target_candidate.is_some());
+        if let Some((path, _, kind)) = backup_candidate.filter(|_| can_backup) {
+            backup_units.push(AtomicModUnit {
+                path: path.clone(),
+                kind,
+            });
+        }
+
+        let live_will_be_absent = if previous_group.is_some() {
+            can_backup
+        } else {
+            let path = target_group
+                .map(|(path, _)| path)
+                .expect("a grouped unit key has a target or previous group");
+            entry_is_absent(&join_relative(mods_root, path)?)?
+        };
+        if let Some((path, _, kind)) = target_candidate.filter(|_| live_will_be_absent) {
+            target_units.push(AtomicModUnit {
+                path: path.clone(),
+                kind,
+            });
+        }
+    }
+    Ok((backup_units, target_units))
+}
+
+fn group_atomic_units(managed: &[ManagedMod]) -> BTreeMap<String, (String, Vec<&ManagedMod>)> {
+    let mut grouped = BTreeMap::new();
+    for managed in managed {
+        let Some(unit) = managed.path.split('/').next() else {
+            continue;
+        };
+        if unit.is_empty() || !unit.to_ascii_lowercase().ends_with(".sc2mod") {
+            continue;
+        }
+        grouped
+            .entry(key(unit))
+            .or_insert_with(|| (unit.to_owned(), Vec::new()))
+            .1
+            .push(managed);
+    }
+    grouped
+}
+
+fn atomic_unit_kind(path: &str, rows: &[&ManagedMod]) -> Option<AtomicModUnitKind> {
+    if rows.len() == 1 && key(&rows[0].path) == key(path) {
+        Some(AtomicModUnitKind::File)
+    } else if rows
+        .iter()
+        .all(|managed| atomic_unit_contains(path, &managed.path) && key(&managed.path) != key(path))
+    {
+        Some(AtomicModUnitKind::Directory)
+    } else {
+        None
+    }
+}
+
+fn entry_is_absent(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(true)
+        }
+        Err(error) => Err(user_path_err(
+            "inspect_mods_target",
+            error.to_string(),
+            path,
+            true,
+        )),
+    }
+}
+
+fn atomic_unit_contains(unit: &str, path: &str) -> bool {
+    let unit = key(unit);
+    let path = key(path);
+    path == unit || path.starts_with(&format!("{unit}/"))
+}
+
+fn move_live_unit_to_backup(
+    mods_root: &Path,
+    backup: &Path,
+    unit: &AtomicModUnit,
+    previous: &[ManagedMod],
+) -> Result<()> {
+    let rows = previous
+        .iter()
+        .filter(|managed| atomic_unit_contains(&unit.path, &managed.path))
+        .collect::<Vec<_>>();
+    if !atomic_unit_tree_matches(mods_root, unit, &rows)? {
+        return Err(package_err(
+            "managed_file_changed",
+            format!("managed Mods container `{}` changed shape", unit.path),
+        ));
+    }
+    let source = join_relative(mods_root, &unit.path)?;
+    let backup_files = backup.join(BACKUP_FILES);
+    ensure_owned_directory(backup, "Mods backup")?;
+    ensure_owned_directory(&backup_files, "Mods backup files")?;
+    let destination = join_relative(&backup_files, &unit.path)?;
+    if !entry_is_absent(&destination)? {
+        return Err(package_err(
+            "unsafe_operation_artifact",
+            format!("Mods backup container `{}` is already occupied", unit.path),
+        ));
+    }
+    rename_mods_with_retry(&source, &destination)
+}
+
+fn move_atomic_unit(
+    staging: &Path,
+    mods_root: &Path,
+    unit: &AtomicModUnit,
+    target: &[ManagedMod],
+) -> Result<()> {
+    verify_atomic_staging_unit(staging, unit, target)?;
+    verify_mods_root(mods_root)?;
+    std::fs::create_dir_all(mods_root)
+        .map_err(|error| user_path_err("create_mods_root", error.to_string(), mods_root, true))?;
+    verify_mods_root(mods_root)?;
+
+    let source = join_relative(staging, &unit.path)?;
+    let destination = join_relative(mods_root, &unit.path)?;
+    ensure_managed_ancestors(mods_root, &destination)?;
+    match std::fs::symlink_metadata(&destination) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(user_path_err(
+                "inspect_mods_target",
+                error.to_string(),
+                &destination,
+                true,
+            ));
+        }
+        Ok(_) => {
+            return Err(package_err(
+                "managed_file_changed",
+                format!(
+                    "Mods container `{}` became occupied before deployment",
+                    unit.path
+                ),
+            ));
+        }
+    }
+
+    rename_mods_with_retry(&source, &destination)
+}
+
+fn verify_atomic_staging_unit(
+    staging: &Path,
+    unit: &AtomicModUnit,
+    target: &[ManagedMod],
+) -> Result<()> {
+    let rows = target
+        .iter()
+        .filter(|managed| atomic_unit_contains(&unit.path, &managed.path))
+        .collect::<Vec<_>>();
+    if atomic_unit_tree_matches(staging, unit, &rows)? {
+        Ok(())
+    } else {
+        Err(package_err(
+            "unsafe_operation_artifact",
+            format!("Mods staging unit `{}` changed shape", unit.path),
+        ))
+    }
+}
+
+fn atomic_unit_tree_matches(
+    root: &Path,
+    unit: &AtomicModUnit,
+    rows: &[impl std::borrow::Borrow<ManagedMod>],
+) -> Result<bool> {
+    let source = join_relative(root, &unit.path)?;
+    ensure_unlinked_ancestors(root, &source, "unsafe_operation_artifact", "Mods container")?;
+    let metadata = match std::fs::symlink_metadata(&source) {
+        Ok(metadata) => metadata,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => {
+            return Err(user_path_err(
+                "inspect_mods_artifact",
+                error.to_string(),
+                &source,
+                true,
+            ));
+        }
+    };
+    if is_link(&metadata) {
+        return Err(package_err(
+            "unsafe_operation_artifact",
+            format!("Mods container `{}` is linked", unit.path),
+        ));
+    }
+
+    match unit.kind {
+        AtomicModUnitKind::File => Ok(metadata.file_type().is_file()
+            && rows.len() == 1
+            && key(&rows[0].borrow().path) == key(&unit.path)),
+        AtomicModUnitKind::Directory if metadata.is_dir() => {
+            let prefix = format!("{}/", unit.path);
+            let relative_rows = rows
+                .iter()
+                .filter_map(|managed| managed.borrow().path.strip_prefix(&prefix))
+                .collect::<Vec<_>>();
+            if relative_rows.len() != rows.len() || relative_rows.is_empty() {
+                return Ok(false);
+            }
+            let unhashed = relative_rows
+                .iter()
+                .map(|path| key(path))
+                .collect::<BTreeSet<_>>();
+            let (actual_directories, actual_files) =
+                inventory_operation_artifact(&source, &unhashed)?;
+            let mut expected_directories = BTreeSet::new();
+            let mut expected_files = BTreeMap::new();
+            for relative in relative_rows {
+                insert_expected_artifact_file(
+                    &mut expected_directories,
+                    &mut expected_files,
+                    relative,
+                    "",
+                )?;
+            }
+            Ok(actual_directories == expected_directories && actual_files == expected_files)
+        }
+        AtomicModUnitKind::Directory => Ok(false),
+    }
+}
+
+fn rename_mods_with_retry(source: &Path, destination: &Path) -> Result<()> {
+    for attempt in 0..RETRY_ATTEMPTS {
+        match std::fs::rename(source, destination) {
+            Ok(()) => return Ok(()),
+            Err(error) if retryable_mods_io(&error) && attempt + 1 < RETRY_ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    RETRY_BASE_MS * (attempt as u64 + 1),
+                ));
+            }
+            Err(error) => {
+                return Err(user_path_err(
+                    "commit_mods_container",
+                    error.to_string(),
+                    destination,
+                    retryable_mods_io(&error),
+                ));
+            }
+        }
+    }
+    unreachable!("the Mods rename retry loop always returns")
+}
+
+fn retryable_mods_io(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+    ) || matches!(error.raw_os_error(), Some(5 | 32 | 33))
 }
 
 fn classify_unmanaged_target(

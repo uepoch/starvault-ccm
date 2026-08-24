@@ -49,6 +49,242 @@ fn deploy(
     rows
 }
 
+#[test]
+fn fully_owned_unpacked_mod_is_moved_from_staging_and_rolls_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_unpacked_mod(&source, "Loose", b"member bytes");
+    let manifest = ingest(&store, &source, "move-loose");
+    let mods_root = temp.path().join("Mods");
+
+    let transition =
+        PreparedModsTransition::prepare(&store, &mods_root, &[], Some(&manifest), "move-loose")
+            .unwrap();
+    let staged = transition.staging_path().join("Loose.SC2Mod");
+    assert!(staged.join("member").is_file());
+
+    transition.apply().unwrap();
+
+    assert!(!staged.exists(), "the complete container should be renamed");
+    assert_eq!(
+        std::fs::read(mods_root.join("Loose.SC2Mod/member")).unwrap(),
+        b"member bytes"
+    );
+    transition.rollback().unwrap();
+    assert!(!mods_root.join("Loose.SC2Mod").exists());
+}
+
+#[test]
+fn fully_owned_packed_mod_is_moved_from_staging_and_finalizes() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_packed_mod(&source, "Packed", b"archive bytes");
+    let manifest = ingest(&store, &source, "move-packed");
+    let mods_root = temp.path().join("Mods");
+
+    let transition =
+        PreparedModsTransition::prepare(&store, &mods_root, &[], Some(&manifest), "move-packed")
+            .unwrap();
+    let staged = transition.staging_path().join("Packed.SC2Mod");
+    assert!(staged.is_file());
+
+    transition.apply().unwrap();
+
+    assert!(!staged.exists(), "the packed Mod should be renamed");
+    assert_eq!(
+        std::fs::read(mods_root.join("Packed.SC2Mod")).unwrap(),
+        b"archive bytes"
+    );
+    transition.finalize().unwrap();
+}
+
+#[test]
+fn multiple_owned_mod_containers_are_each_moved_from_staging() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_unpacked_mod(&source, "First", b"first bytes");
+    make_unpacked_mod(&source, "Second", b"second bytes");
+    let manifest = ingest(&store, &source, "move-multiple");
+    let mods_root = temp.path().join("Mods");
+
+    let transition =
+        PreparedModsTransition::prepare(&store, &mods_root, &[], Some(&manifest), "move-multiple")
+            .unwrap();
+
+    transition.apply().unwrap();
+
+    assert_eq!(
+        std::fs::read(mods_root.join("First.SC2Mod/member")).unwrap(),
+        b"first bytes"
+    );
+    assert_eq!(
+        std::fs::read(mods_root.join("Second.SC2Mod/member")).unwrap(),
+        b"second bytes"
+    );
+    transition.rollback().unwrap();
+}
+
+#[test]
+fn fully_owned_unpacked_mod_moves_to_backup_only_when_restore_applies() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_unpacked_mod(&source, "Loose", b"member bytes");
+    let manifest = ingest(&store, &source, "restore-move-loose");
+    let mods_root = temp.path().join("Mods");
+    let rows = deploy(&store, &mods_root, &[], &manifest, "deploy-loose");
+
+    let transition =
+        PreparedModsTransition::prepare(&store, &mods_root, &rows, None, "restore-loose").unwrap();
+    let backup = transition.backup_path().join("files/Loose.SC2Mod");
+    assert!(mods_root.join("Loose.SC2Mod/member").is_file());
+    assert!(
+        !backup.exists(),
+        "prepare must not copy a complete owned container"
+    );
+
+    transition.apply().unwrap();
+
+    assert!(!mods_root.join("Loose.SC2Mod").exists());
+    assert_eq!(
+        std::fs::read(backup.join("member")).unwrap(),
+        b"member bytes"
+    );
+    transition.rollback().unwrap();
+    assert_eq!(
+        std::fs::read(mods_root.join("Loose.SC2Mod/member")).unwrap(),
+        b"member bytes"
+    );
+}
+
+#[test]
+fn fully_owned_same_name_container_swaps_by_rename_and_rolls_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let first_source = temp.path().join("first-source");
+    make_map(&first_source, "first");
+    make_unpacked_mod(&first_source, "Shared", b"first bytes");
+    let first = ingest(&store, &first_source, "first-container");
+    let second_source = temp.path().join("second-source");
+    make_map(&second_source, "second");
+    make_unpacked_mod(&second_source, "Shared", b"second bytes");
+    let second = ingest(&store, &second_source, "second-container");
+    let mods_root = temp.path().join("Mods");
+    let first_rows = deploy(&store, &mods_root, &[], &first, "deploy-first");
+
+    let transition = PreparedModsTransition::prepare(
+        &store,
+        &mods_root,
+        &first_rows,
+        Some(&second),
+        "swap-container",
+    )
+    .unwrap();
+    let backup = transition.backup_path().join("files/Shared.SC2Mod");
+    let staged = transition.staging_path().join("Shared.SC2Mod");
+    assert!(!backup.exists());
+    assert_eq!(
+        std::fs::read(staged.join("member")).unwrap(),
+        b"second bytes"
+    );
+
+    transition.apply().unwrap();
+
+    assert_eq!(
+        std::fs::read(mods_root.join("Shared.SC2Mod/member")).unwrap(),
+        b"second bytes"
+    );
+    assert_eq!(
+        std::fs::read(backup.join("member")).unwrap(),
+        b"first bytes"
+    );
+    assert!(!staged.exists());
+    transition.rollback().unwrap();
+    assert_eq!(
+        std::fs::read(mods_root.join("Shared.SC2Mod/member")).unwrap(),
+        b"first bytes"
+    );
+}
+
+#[test]
+fn extra_external_file_disables_container_move_and_survives_restore() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    make_unpacked_mod(&source, "Loose", b"member bytes");
+    let manifest = ingest(&store, &source, "extra-file");
+    let mods_root = temp.path().join("Mods");
+    let rows = deploy(&store, &mods_root, &[], &manifest, "deploy-extra");
+    let external = mods_root.join("Loose.SC2Mod/user-file");
+    std::fs::write(&external, b"keep me").unwrap();
+
+    let transition =
+        PreparedModsTransition::prepare(&store, &mods_root, &rows, None, "restore-extra").unwrap();
+    assert!(
+        transition
+            .backup_path()
+            .join("files/Loose.SC2Mod/member")
+            .is_file(),
+        "mixed container must retain the file-level fallback"
+    );
+
+    transition.apply().unwrap();
+    transition.finalize().unwrap();
+
+    assert_eq!(std::fs::read(external).unwrap(), b"keep me");
+    assert!(!mods_root.join("Loose.SC2Mod/member").exists());
+}
+
+#[test]
+fn mixed_borrowed_container_uses_per_file_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let source = temp.path().join("source");
+    make_map(&source, "campaign");
+    let container = source.join("Mods/Mixed.SC2Mod");
+    std::fs::create_dir_all(&container).unwrap();
+    std::fs::write(container.join("borrowed"), b"external bytes").unwrap();
+    std::fs::write(container.join("created"), b"package bytes").unwrap();
+    let manifest = ingest(&store, &source, "mixed-container");
+    let mods_root = temp.path().join("Mods");
+    let external = mods_root.join("Mixed.SC2Mod/borrowed");
+    std::fs::create_dir_all(external.parent().unwrap()).unwrap();
+    std::fs::write(&external, b"external bytes").unwrap();
+
+    let transition = PreparedModsTransition::prepare(
+        &store,
+        &mods_root,
+        &[],
+        Some(&manifest),
+        "mixed-container",
+    )
+    .unwrap();
+    let staged = transition.staging_path().join("Mixed.SC2Mod");
+
+    transition.apply().unwrap();
+
+    assert!(
+        staged.join("created").is_file(),
+        "mixed ownership must keep the per-file copy fallback"
+    );
+    assert_eq!(std::fs::read(&external).unwrap(), b"external bytes");
+    assert_eq!(
+        std::fs::read(mods_root.join("Mixed.SC2Mod/created")).unwrap(),
+        b"package bytes"
+    );
+    transition.rollback().unwrap();
+    assert_eq!(std::fs::read(external).unwrap(), b"external bytes");
+    assert!(!mods_root.join("Mixed.SC2Mod/created").exists());
+}
+
 #[cfg(unix)]
 fn create_directory_link(target: &Path, link: &Path) {
     std::os::unix::fs::symlink(target, link).unwrap();
@@ -263,7 +499,7 @@ fn changed_managed_mod_blocks_transition_and_is_never_deleted() {
 
 #[cfg(any(unix, windows))]
 #[test]
-fn restore_rejects_a_linked_managed_ancestor_without_touching_external_files() {
+fn restore_rejects_a_linked_managed_ancestor_without_touching_or_following_it() {
     let temp = tempfile::tempdir().unwrap();
     let store = Store::open_for_tests(temp.path().join("store")).unwrap();
     let source = temp.path().join("source");
@@ -294,11 +530,10 @@ fn restore_rejects_a_linked_managed_ancestor_without_touching_external_files() {
     assert_eq!(std::fs::read(external.join("sentinel")).unwrap(), b"keep");
 
     remove_directory_link(&container);
-    restore.rollback().unwrap();
-    assert_eq!(
-        std::fs::read(mods_root.join("Shape.SC2Mod/member")).unwrap(),
-        b"managed member"
-    );
+    let rollback_error = restore.rollback().unwrap_err();
+    assert_eq!(rollback_error.code(), "recovery_required");
+    assert!(!mods_root.join("Shape.SC2Mod").exists());
+    assert_eq!(std::fs::read(external.join("sentinel")).unwrap(), b"keep");
 }
 
 #[test]

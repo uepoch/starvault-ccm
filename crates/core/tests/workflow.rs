@@ -150,11 +150,25 @@ fn session_health_reuses_startup_and_committed_verification() {
 
     workflow.activate(&fixture.first).unwrap();
     workflow.library_snapshot().unwrap();
-    assert_eq!(verifications.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        verifications.load(Ordering::SeqCst),
+        1,
+        "a ready startup receipt should avoid re-hashing Mods during activation"
+    );
+    workflow.play_with(&fixture.first, |_| Ok(())).unwrap();
+    assert_eq!(
+        verifications.load(Ordering::SeqCst),
+        1,
+        "Play preflight should reuse the ready session receipt"
+    );
 
     workflow.restore_vanilla().unwrap();
     workflow.library_snapshot().unwrap();
-    assert_eq!(verifications.load(Ordering::SeqCst), 5);
+    assert_eq!(
+        verifications.load(Ordering::SeqCst),
+        1,
+        "committed shape checks should keep the session receipt ready"
+    );
 }
 
 #[test]

@@ -242,13 +242,6 @@ impl Store {
         });
     }
 
-    pub(crate) fn invalidate_workflow_health(&self) {
-        self.workflow_health
-            .lock()
-            .expect("workflow health cache poisoned")
-            .take();
-    }
-
     pub fn deploy_dir(&self, faction: SlotId, revision: &str) -> Result<PathBuf> {
         validate_sha256(revision, "revision")?;
         self.ensure_store_root()?;

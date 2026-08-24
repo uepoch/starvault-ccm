@@ -272,7 +272,15 @@ impl<'a> Workflow<'a> {
                 self.store.verify_package(package_id)?;
             }
         }
-        Ok(self.health())
+        if let Some(health) = self.cached_health() {
+            if health.state == HealthState::Ready {
+                let active = self.store.active_campaign()?;
+                self.verify_state_shape_ready(active.as_ref())?;
+            }
+            Ok(health)
+        } else {
+            Ok(self.health())
+        }
     }
 
     pub fn activate(&self, package_id: &PackageId) -> Result<ActiveCampaign> {
@@ -284,12 +292,13 @@ impl<'a> Workflow<'a> {
             .filter(|active| &active.id == package_id)
         {
             self.campaign_manifest(&active)?;
-            self.verify_state_ready(Some(&active)).map_err(|error| {
-                package_err(
-                    "active_campaign_drifted",
-                    format!("the active campaign needs repair: {}", error),
-                )
-            })?;
+            self.verify_state_for_locked_operation(Some(&active))
+                .map_err(|error| {
+                    package_err(
+                        "active_campaign_drifted",
+                        format!("the active campaign needs repair: {}", error),
+                    )
+                })?;
             return Ok(active);
         }
         self.require_save_isolation_available()?;
@@ -416,7 +425,6 @@ impl<'a> Workflow<'a> {
 
     fn ensure_mutation_ready(&self) -> Result<()> {
         self.ensure_mutation_checkpoint()?;
-        self.store.invalidate_workflow_health();
         if PendingOperation::load(self.store.root())?.is_some() {
             self.recover_pending()?;
         }
@@ -447,7 +455,7 @@ impl<'a> Workflow<'a> {
             .as_ref()
             .map(|campaign| self.campaign_manifest(campaign))
             .transpose()?;
-        self.verify_state(previous_campaign.as_ref())?;
+        self.verify_state_for_locked_operation(previous_campaign.as_ref())?;
         let previous_mods = self.store.managed_mods()?;
         let target_campaign = target_manifest.as_ref().map(campaign_from_manifest);
         let operation_id = next_operation_id();
@@ -520,7 +528,7 @@ impl<'a> Workflow<'a> {
             self.fail(FailurePoint::SlotsPrepared)?;
 
             self.ensure_mutation_checkpoint()?;
-            let mods = PreparedModsTransition::prepare_with_policy(
+            let mods = PreparedModsTransition::prepare_preverified_with_policy(
                 self.store,
                 &self.layout.mods_dir(),
                 &previous_mods,
@@ -819,7 +827,7 @@ impl<'a> Workflow<'a> {
             saves.verify_finalize_ready()?;
         }
         slots::verify_finalize_bound_paths(&journal.paths.slots)?;
-        mods::verify_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
+        mods::verify_committed_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
         if let Some(saves) = &saves {
             self.ensure_mutation_checkpoint()?;
             saves.finalize()?;
@@ -867,6 +875,7 @@ impl<'a> Workflow<'a> {
         mods::verify_rollback_from_paths_bound(
             &self.layout.mods_dir(),
             required_path(&journal.paths.mods_backup, "Mods backup")?,
+            required_path(&journal.paths.mods_staging, "Mods staging")?,
             mods_plan_sha256,
         )?;
         if journal.kind == OperationKind::Repair {
@@ -908,6 +917,7 @@ impl<'a> Workflow<'a> {
         mods::verify_rollback_from_paths_bound(
             &self.layout.mods_dir(),
             required_path(&journal.paths.mods_backup, "Mods backup")?,
+            required_path(&journal.paths.mods_staging, "Mods staging")?,
             mods_plan_sha256,
         )?;
         if journal.kind != OperationKind::Repair {
@@ -929,7 +939,7 @@ impl<'a> Workflow<'a> {
             .as_deref()
             .ok_or_else(|| invalid_journal("missing Mods plan digest"))?;
         slots::verify_finalize_bound_paths(&journal.paths.slots)?;
-        mods::verify_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
+        mods::verify_rollback_finalize_paths_bound(mods_backup, mods_staging, mods_plan_sha256)?;
         if let Some(saves) = self.recover_saves(journal)? {
             self.ensure_mutation_checkpoint()?;
             saves.rollback()?;
@@ -1142,8 +1152,10 @@ impl<'a> Workflow<'a> {
         expected: Option<&ActiveCampaign>,
         verify_mod_contents: bool,
     ) -> Result<()> {
-        if let Some(probe) = &self.verification_probe {
-            probe();
+        if verify_mod_contents {
+            if let Some(probe) = &self.verification_probe {
+                probe();
+            }
         }
         if expected.is_some() || self.layout.root().symlink_metadata().is_ok() {
             self.layout.validate_mutation_roots()?;
@@ -1190,6 +1202,17 @@ impl<'a> Workflow<'a> {
         self.verify_state(expected)?;
         self.cache_ready();
         Ok(())
+    }
+
+    fn verify_state_for_locked_operation(&self, expected: Option<&ActiveCampaign>) -> Result<()> {
+        if self
+            .cached_health()
+            .is_some_and(|health| health.state == HealthState::Ready)
+        {
+            self.verify_state_shape_ready(expected)
+        } else {
+            self.verify_state_ready(expected)
+        }
     }
 
     fn fail(&self, point: FailurePoint) -> Result<()> {

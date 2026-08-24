@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.2] - 2026-08-24
+
+- Large loose Mods now activate by renaming complete staged `.SC2Mod`
+  containers into place instead of copying thousands of files into the live
+  game directory.
+- Return to vanilla moves fully owned Mod containers into the operation backup
+  and can roll them back by rename. Mixed or externally owned containers keep
+  the conservative per-file path.
+- A healthy startup verification is reused for later activation, Play, and
+  restore operations in the same process. Interrupted recovery still performs
+  full verification before changing files.
+
 ## [0.2.1] - 2026-08-24
 
 - Release packaging now gives the installer a fixed GitHub-safe filename and
