@@ -106,7 +106,6 @@ local paths.
 
 The Cargo workspace contains `crates/core`, the Tauri-independent domain, and
 `crates/app`, the desktop shell. The React frontend lives in `crates/app/ui`.
-Design documents live under [`docs/design`](docs/design).
 
 Install `cargo-audit` and Vite+ before running the complete local gate:
 
@@ -121,9 +120,7 @@ JavaScript dependency audit, and the production web build.
 
 The release helper also runs the full gate and verifies that the requested
 version matches the Cargo workspace and `tauri.conf.json` before it dispatches
-the signing workflow. See the
-[release process](docs/design/release-process.md) for the signing order and the
-one documented RustSec exception.
+the signing workflow.
 
 ## Naming and license
 

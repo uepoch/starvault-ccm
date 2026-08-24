@@ -8,6 +8,3 @@ findings are now requirements in the current design documents:
 - the domain core must remain independent of Tauri;
 - the frontend receives stable errors instead of diagnostic chains;
 - long imports need progress and cancellation.
-
-See [`design/architecture.md`](design/architecture.md) and
-[`design/slot-manager.md`](design/slot-manager.md) for the current system.
