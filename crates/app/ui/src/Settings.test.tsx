@@ -23,6 +23,8 @@ describe("Settings", () => {
       game_exe: "C:\\StarCraft II\\StarCraft II.exe",
       strategy_override: null,
       crash_reports_opt_in: false,
+      analytics_enabled: true,
+      analytics_acknowledged: true,
       log_level: "info",
       save_isolation: true,
       saves_profile: "profile-a",

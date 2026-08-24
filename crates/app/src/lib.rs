@@ -107,6 +107,11 @@ pub fn run() {
             commands::migration::list_migration_candidates,
             commands::migration::migrate_candidate,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                analytics::flush_on_exit(app);
+            }
+        });
 }
