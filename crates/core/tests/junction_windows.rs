@@ -178,6 +178,32 @@ fn dangling_owned_root_junction_can_be_restored() {
 }
 
 #[test]
+fn orphan_repair_removes_the_junction_without_touching_its_deployment() {
+    let temp = tempfile::tempdir().unwrap();
+    let layout = WindowsLayout::new(temp.path().join("sc2"));
+    std::fs::create_dir_all(layout.root().join("Maps")).unwrap();
+    std::fs::write(layout.exe(), b"fake executable").unwrap();
+    let store = Store::open_for_tests(temp.path().join("store")).unwrap();
+    let target = store
+        .root()
+        .join("deploy")
+        .join(format!("lotv-{}", "a".repeat(64)));
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("sentinel"), b"keep").unwrap();
+    junction::create(&target, layout.campaign_dir()).unwrap();
+
+    let workflow = Workflow::new(&layout, &store).with_running_probe(|| false);
+    assert_eq!(
+        workflow.health().issues[0].code,
+        "orphaned_starvault_campaign"
+    );
+    workflow.restore_vanilla().unwrap();
+
+    assert!(layout.campaign_dir().symlink_metadata().is_err());
+    assert_eq!(std::fs::read(target.join("sentinel")).unwrap(), b"keep");
+}
+
+#[test]
 fn a_foreign_campaign_root_junction_is_never_followed() {
     let temp = tempfile::tempdir().unwrap();
     let layout = WindowsLayout::new(temp.path().join("sc2"));

@@ -12,6 +12,17 @@ use crate::identity::PackageId;
 use crate::package::metadata::SlotGuessKind;
 use crate::package::normalize::PackagePlan;
 
+pub fn is_safe_translator_id(value: &str) -> bool {
+    let Some(token) = value.strip_prefix("upload-") else {
+        return false;
+    };
+    !token.is_empty()
+        && token.len() <= 64
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
 /// Production archive limits. Tests may pass smaller limits through
 /// [`extract_archive_with`] without allocating multi-gigabyte fixtures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

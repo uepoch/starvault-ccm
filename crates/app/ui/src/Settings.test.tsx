@@ -1,12 +1,14 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
+import { notifications } from "@mantine/notifications";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { clearAllData, getConfig, getSavesStatus, listLibrary, saveConfig } from "./ipc";
 import Settings from "./Settings";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn().mockResolvedValue("0.2.0") }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@mantine/notifications", () => ({ notifications: { show: vi.fn() } }));
 vi.mock("./ipc", () => ({
   clearAllData: vi.fn(),
   discoverGameExe: vi.fn(),
@@ -157,5 +159,40 @@ describe("Settings", () => {
 
     resolveSave();
     await waitFor(() => expect(clearAllData).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps all data and focuses the executable field when the game path is invalid", async () => {
+    vi.mocked(listLibrary).mockResolvedValueOnce({
+      entries: [],
+      active_campaign: null,
+      health: { state: "ready", issues: [] },
+    });
+    vi.mocked(clearAllData).mockRejectedValueOnce({
+      kind: "environment",
+      code: "game_not_found",
+      message: "StarCraft II was not found.",
+      retryable: false,
+    });
+    const user = userEvent.setup();
+    render(
+      <MantineProvider defaultColorScheme="dark">
+        <Settings />
+      </MantineProvider>,
+    );
+
+    const gameExe = await screen.findByLabelText("StarCraft II.exe");
+    const scrollIntoView = vi.spyOn(gameExe, "scrollIntoView");
+    await user.click(screen.getByRole("button", { name: "Clear all data…" }));
+    await user.click(await screen.findByRole("button", { name: "Delete everything" }));
+
+    await waitFor(() => expect(document.activeElement).toBe(gameExe));
+    expect(scrollIntoView).toHaveBeenCalled();
+    expect(notifications.show).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Clear failed",
+        message:
+          "Nothing was deleted. Choose StarCraft II.exe with Browse or Auto-detect, wait for Saved, then retry.",
+      }),
+    );
   });
 });

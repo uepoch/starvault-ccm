@@ -41,6 +41,7 @@ import {
 import { toCommandError } from "./errors";
 import { FACTION_COLORS, FACTION_NAMES, FACTION_TITLES, SLOTS } from "./factions";
 import ImportWizard from "./ImportWizard";
+import TranslatorLinkPrompt from "./TranslatorLinkPrompt";
 import {
   activatePackage,
   editPackageMetadata,
@@ -51,7 +52,13 @@ import {
   revealPackage,
 } from "./ipc";
 import MigrationBanner from "./MigrationBanner";
-import type { CommandError, LibraryEntry, LibrarySnapshot } from "./types";
+import type {
+  CommandError,
+  ImportSource,
+  LibraryEntry,
+  LibrarySnapshot,
+  OpenRequest,
+} from "./types";
 
 const columnHelper = createColumnHelper<LibraryEntry>();
 
@@ -68,11 +75,11 @@ function formatDate(epoch: number | null): string {
 }
 
 export default function Library({
-  pendingZip,
-  onZipConsumed,
+  openRequest,
+  onRequestConsumed,
 }: {
-  pendingZip: string | null;
-  onZipConsumed: () => void;
+  openRequest: OpenRequest | null;
+  onRequestConsumed: () => void;
 }) {
   const [snapshot, setSnapshot] = useState<LibrarySnapshot | null>(null);
   const [loadError, setLoadError] = useState<CommandError | null>(null);
@@ -96,6 +103,7 @@ export default function Library({
   const [factionFilter, setFactionFilter] = useState<string | null>(lastView.factionFilter);
   const [sorting, setSorting] = useState<SortingState>(lastView.sorting);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>(lastView.columnFilters);
+  const [approvedSource, setApprovedSource] = useState<ImportSource | null>(null);
 
   useEffect(() => {
     lastView.search = search;
@@ -103,6 +111,11 @@ export default function Library({
     lastView.sorting = sorting;
     lastView.columnFilters = columnFilters;
   }, [search, factionFilter, sorting, columnFilters]);
+  useEffect(() => {
+    if (openRequest?.kind !== "path") return;
+    setApprovedSource({ kind: "path", path: openRequest.path });
+    onRequestConsumed();
+  }, [onRequestConsumed, openRequest]);
 
   const refresh = useCallback(async () => {
     try {
@@ -119,6 +132,9 @@ export default function Library({
 
   const active = snapshot?.active_campaign ?? null;
   const activeEntry = snapshot?.entries.find((entry) => entry.id === active?.id) ?? null;
+  const vanillaRepairAvailable = snapshot?.health.issues.some(
+    (issue) => issue.code === "orphaned_starvault_campaign",
+  );
   const mutationsBlocked = snapshot === null || snapshot.health.state === "recovery_required";
 
   const openEdit = (entry: LibraryEntry) => {
@@ -150,7 +166,7 @@ export default function Library({
     }
   };
 
-  const activate = async (entry: LibraryEntry) => {
+  const activate = async (entry: Pick<LibraryEntry, "id" | "title">) => {
     setBusyId(entry.id);
     setOperationError(null);
     try {
@@ -402,8 +418,15 @@ export default function Library({
           activePackageId={active?.id ?? null}
           disabled={mutationsBlocked}
           onImported={refresh}
-          pendingZip={pendingZip}
-          onZipConsumed={onZipConsumed}
+          pendingSource={approvedSource}
+          onSourceConsumed={() => setApprovedSource(null)}
+        />
+        <TranslatorLinkPrompt
+          instanceId={openRequest?.kind === "translator" ? openRequest.instanceId : null}
+          disabled={mutationsBlocked}
+          onDismiss={onRequestConsumed}
+          onDownload={setApprovedSource}
+          onActivate={activate}
         />
       </Group>
 
@@ -469,15 +492,49 @@ export default function Library({
         >
           <Stack gap="xs">
             {snapshot.health.issues.map((issue) => (
-              <Text size="sm" key={`${issue.code}:${issue.path ?? ""}`}>
-                {issue.message}
-              </Text>
+              <Stack gap={2} key={`${issue.code}:${issue.path ?? ""}`}>
+                <Text size="sm">{issue.message}</Text>
+                {issue.path && (
+                  <Text size="xs" ff="monospace">
+                    {issue.path}
+                  </Text>
+                )}
+              </Stack>
             ))}
             {active && snapshot.health.state === "drifted" && (
               <Text size="sm">
                 Return to vanilla to discard the active deployment before retrying.
               </Text>
             )}
+            <Group gap="xs">
+              {vanillaRepairAvailable && (
+                <Button
+                  size="xs"
+                  variant="light"
+                  loading={pageBusy === "restore"}
+                  disabled={pageBusy !== null}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "StarVault will restore the preserved campaign directory and will not delete unknown Mods. Continue?",
+                      )
+                    ) {
+                      void returnToVanilla();
+                    }
+                  }}
+                >
+                  Repair vanilla state…
+                </Button>
+              )}
+              <Button
+                size="xs"
+                variant="default"
+                disabled={pageBusy !== null}
+                onClick={() => void refresh()}
+              >
+                Check again
+              </Button>
+            </Group>
           </Stack>
         </Alert>
       )}

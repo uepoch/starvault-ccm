@@ -17,7 +17,7 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { errMessage } from "./errors";
+import { errMessage, toCommandError } from "./errors";
 import {
   clearAllData,
   discoverGameExe,
@@ -49,6 +49,7 @@ export default function Settings() {
   const skipNextSaveRef = useRef(false);
   const autosaveTimerRef = useRef<number | null>(null);
   const activeSavesRef = useRef<Set<Promise<void>>>(new Set());
+  const gameExeRef = useRef<HTMLInputElement>(null);
 
   const loadSettings = useCallback(async () => {
     loadedRef.current = false;
@@ -180,6 +181,7 @@ export default function Settings() {
               <Stack gap="sm">
                 <Text fw={500}>General</Text>
                 <TextInput
+                  ref={gameExeRef}
                   label="StarCraft II.exe"
                   placeholder="C:\\Program Files (x86)\\StarCraft II\\StarCraft II.exe"
                   value={gameExe}
@@ -369,11 +371,20 @@ export default function Settings() {
                   await loadSettings();
                   notifications.show({ color: "green", message: "All data cleared." });
                 } catch (error) {
+                  const commandError = toCommandError(error);
+                  const message =
+                    commandError.code === "game_not_found"
+                      ? "Nothing was deleted. Choose StarCraft II.exe with Browse or Auto-detect, wait for Saved, then retry."
+                      : commandError.message;
                   notifications.show({
                     color: "red",
                     title: "Clear failed",
-                    message: errMessage(error),
+                    message,
                   });
+                  if (commandError.code === "game_not_found") {
+                    gameExeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+                    gameExeRef.current?.focus();
+                  }
                   loadedRef.current = true;
                 }
               }}

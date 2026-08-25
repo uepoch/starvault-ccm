@@ -1,9 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { listen } from "@tauri-apps/api/event";
 import userEvent from "@testing-library/user-event";
 import { MantineProvider } from "@mantine/core";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { importApi } from "./ipc";
 import ImportWizard from "./ImportWizard";
+import type { ImportOperationSnapshot } from "./types";
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(vi.fn()),
@@ -17,6 +19,7 @@ vi.mock("./ipc", () => ({
   activatePackage: vi.fn(),
   importApi: {
     analyze: vi.fn(),
+    analyzeTranslator: vi.fn(),
     ingest: vi.fn(),
     cancel: vi.fn(),
   },
@@ -51,8 +54,8 @@ describe("ImportWizard", () => {
           knownIds={new Set(["active-campaign"])}
           activePackageId="active-campaign"
           onImported={vi.fn()}
-          pendingZip={null}
-          onZipConsumed={vi.fn()}
+          pendingSource={null}
+          onSourceConsumed={vi.fn()}
         />
       </MantineProvider>,
     );
@@ -83,8 +86,8 @@ describe("ImportWizard", () => {
           knownIds={new Set()}
           activePackageId={null}
           onImported={vi.fn()}
-          pendingZip={null}
-          onZipConsumed={vi.fn()}
+          pendingSource={null}
+          onSourceConsumed={vi.fn()}
         />
       </MantineProvider>,
     );
@@ -106,23 +109,19 @@ describe("ImportWizard", () => {
 
   it("ignores an analysis result that arrives after the wizard closes", async () => {
     const user = userEvent.setup();
-    let resolveAnalysis: (value: Awaited<ReturnType<typeof importApi.analyze>>) => void = () => {
-      throw new Error("analysis resolver was not initialized");
-    };
-    vi.mocked(importApi.analyze).mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveAnalysis = resolve;
-        }),
-    );
+    let resolveAnalysis!: (value: ImportOperationSnapshot) => void;
+    const analysis = new Promise<ImportOperationSnapshot>((resolve) => {
+      resolveAnalysis = resolve;
+    });
+    vi.mocked(importApi.analyze).mockReturnValueOnce(analysis);
     render(
       <MantineProvider defaultColorScheme="dark">
         <ImportWizard
           knownIds={new Set()}
           activePackageId={null}
           onImported={vi.fn()}
-          pendingZip={null}
-          onZipConsumed={vi.fn()}
+          pendingSource={null}
+          onSourceConsumed={vi.fn()}
         />
       </MantineProvider>,
     );
@@ -166,8 +165,8 @@ describe("ImportWizard", () => {
           knownIds={new Set()}
           activePackageId={null}
           onImported={vi.fn()}
-          pendingZip={null}
-          onZipConsumed={vi.fn()}
+          pendingSource={null}
+          onSourceConsumed={vi.fn()}
         />
       </MantineProvider>,
     );
@@ -181,5 +180,67 @@ describe("ImportWizard", () => {
     await user.click(screen.getByRole("button", { name: "Retry cleanup and close" }));
     await waitFor(() => expect(importApi.cancel).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.queryByText("Import cleanup failed")).toBeNull());
+  });
+  it("downloads an approved translator source before showing the normal preview", async () => {
+    let resolveAnalysis!: (value: ImportOperationSnapshot) => void;
+    const analysis = new Promise<ImportOperationSnapshot>((resolve) => {
+      resolveAnalysis = resolve;
+    });
+    vi.mocked(importApi.analyzeTranslator).mockReturnValueOnce(analysis);
+    render(
+      <MantineProvider defaultColorScheme="dark">
+        <ImportWizard
+          knownIds={new Set()}
+          activePackageId={null}
+          onImported={vi.fn()}
+          pendingSource={{
+            kind: "translator",
+            instanceId: "upload-wpRtPJWdAa",
+            expectedSize: 538_740_099,
+          }}
+          onSourceConsumed={vi.fn()}
+        />
+      </MantineProvider>,
+    );
+
+    await waitFor(() =>
+      expect(importApi.analyzeTranslator).toHaveBeenCalledWith(
+        expect.any(String),
+        "upload-wpRtPJWdAa",
+        538_740_099,
+      ),
+    );
+    expect(importApi.analyze).not.toHaveBeenCalled();
+    const listener = vi.mocked(listen).mock.calls[0][1];
+    act(() => {
+      listener({
+        payload: {
+          op_id: vi.mocked(importApi.analyzeTranslator).mock.calls[0][0],
+          phase: "download",
+          completed: 100,
+          total: 538_740_099,
+        },
+      } as never);
+    });
+    expect(await screen.findByText("Downloading campaign…")).toBeTruthy();
+
+    await act(async () => {
+      resolveAnalysis({
+        op_id: "translator-operation",
+        state: "Ready",
+        preview: {
+          suggested_id: "translated-campaign",
+          title: "Translated campaign",
+          author: null,
+          version: null,
+          desc: null,
+          slot_guess: "wol",
+          matched_pattern: null,
+          warnings: [],
+          file_count: 8,
+        },
+      });
+    });
+    expect(await screen.findByDisplayValue("Translated campaign")).toBeTruthy();
   });
 });

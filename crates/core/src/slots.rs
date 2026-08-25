@@ -58,6 +58,14 @@ struct SlotChange {
     target_state: SlotStateBinding,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VanillaRepair {
+    None,
+    RemoveOwnedLink,
+    RestorePlain,
+    RemoveOwnedLinkAndRestorePlain,
+}
+
 pub struct SlotManager<'a> {
     layout: &'a WindowsLayout,
     store: &'a Store,
@@ -189,23 +197,23 @@ impl<'a> SlotManager<'a> {
         let live = self.layout.campaign_dir();
         let plain = self.layout.plain_campaign_dir();
         match manifest {
-            None => {
-                ensure_absent(&plain)?;
-                match std::fs::symlink_metadata(&live) {
-                    Ok(metadata) if !is_link(&metadata) && metadata.is_dir() => Ok(()),
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                    Ok(_) => Err(package_err(
-                        "unowned_campaign_slot_link",
-                        "Maps/Campaign is not a real directory while StarVault is in vanilla state",
-                    )),
-                    Err(error) => Err(user_path_err(
-                        "inspect_campaign_root",
-                        error.to_string(),
-                        &live,
-                        true,
-                    )),
+            None => match self.vanilla_repair()? {
+                VanillaRepair::None => Ok(()),
+                VanillaRepair::RestorePlain => Err(user_path_err(
+                    "orphaned_starvault_campaign",
+                    "StarVault can safely restore the preserved vanilla campaign state",
+                    plain,
+                    false,
+                )),
+                VanillaRepair::RemoveOwnedLink | VanillaRepair::RemoveOwnedLinkAndRestorePlain => {
+                    Err(user_path_err(
+                        "orphaned_starvault_campaign",
+                        "StarVault can safely restore the preserved vanilla campaign state",
+                        live,
+                        false,
+                    ))
                 }
-            }
+            },
             Some(manifest) => {
                 ensure_real_directory(&plain, "preserved plain campaign directory")?;
                 let metadata = std::fs::symlink_metadata(&live).map_err(|error| {
@@ -250,6 +258,84 @@ impl<'a> SlotManager<'a> {
                 }
             }
         }
+    }
+
+    pub(crate) fn repair_vanilla_orphan(&self) -> Result<()> {
+        let live = self.layout.campaign_dir();
+        let plain = self.layout.plain_campaign_dir();
+        match self.vanilla_repair()? {
+            VanillaRepair::None => {}
+            VanillaRepair::RemoveOwnedLink => {
+                retry_filesystem(&live, || remove_link(&live))?;
+            }
+            VanillaRepair::RestorePlain => rename_with_retry(&plain, &live)?,
+            VanillaRepair::RemoveOwnedLinkAndRestorePlain => {
+                retry_filesystem(&live, || remove_link(&live))?;
+                rename_with_retry(&plain, &live)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn vanilla_repair(&self) -> Result<VanillaRepair> {
+        let live = self.layout.campaign_dir();
+        let plain = self.layout.plain_campaign_dir();
+        reject_unbound_slot_artifacts(&live)?;
+
+        let plain_metadata = optional_metadata(&plain)?;
+        if plain_metadata
+            .as_ref()
+            .is_some_and(|metadata| is_link(metadata) || !metadata.is_dir())
+        {
+            return Err(user_path_err(
+                "unsafe_preserved_campaign",
+                "Campaign.starvault-plain is not a real directory; move it aside manually, then check again",
+                &plain,
+                false,
+            ));
+        }
+        let has_plain = plain_metadata.is_some();
+
+        let Some(live_metadata) = optional_metadata(&live)? else {
+            return Ok(if has_plain {
+                VanillaRepair::RestorePlain
+            } else {
+                VanillaRepair::None
+            });
+        };
+        if is_link(&live_metadata) {
+            if !link_targets_owned_deployment(&live, &self.store.root().join("deploy"))? {
+                return Err(user_path_err(
+                    "unowned_campaign_slot_link",
+                    "Maps/Campaign is a foreign link or reparse point; restore it manually, then check again",
+                    &live,
+                    false,
+                ));
+            }
+            return Ok(if has_plain {
+                VanillaRepair::RemoveOwnedLinkAndRestorePlain
+            } else {
+                VanillaRepair::RemoveOwnedLink
+            });
+        }
+        if live_metadata.is_dir() {
+            return if has_plain {
+                Err(user_path_err(
+                    "ambiguous_campaign_state",
+                    "Campaign and Campaign.starvault-plain are both real directories; move or merge the custom copy manually, then check again",
+                    &plain,
+                    false,
+                ))
+            } else {
+                Ok(VanillaRepair::None)
+            };
+        }
+        Err(user_path_err(
+            "unsafe_campaign_root",
+            "Maps/Campaign is not a directory; move it aside manually, then check again",
+            &live,
+            false,
+        ))
     }
 
     fn verify_owned_for_restore(&self, manifest: &PackageManifest) -> Result<()> {
@@ -852,6 +938,87 @@ fn live_link_targets(live: &Path, target: &Path) -> Result<bool> {
         return Ok(false);
     }
     Ok(canonical_link_target(live)? == canonical_target_allow_missing(target)?)
+}
+
+fn link_targets_owned_deployment(link: &Path, deploy_root: &Path) -> Result<bool> {
+    let target = canonical_link_target(link)?;
+    let deploy_root = canonical_target_allow_missing(deploy_root)?;
+    let target_is_directory = match std::fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata.is_dir() && !is_link(&metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => {
+            return Err(user_path_err(
+                "inspect_campaign_link",
+                error.to_string(),
+                &target,
+                true,
+            ));
+        }
+    };
+    Ok(target_is_directory
+        && target.parent() == Some(deploy_root.as_path())
+        && target.file_name().is_some_and(is_deployment_name))
+}
+
+fn is_deployment_name(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    SlotId::ALL.iter().any(|faction| {
+        name.strip_prefix(&format!("{}-", faction.as_str()))
+            .is_some_and(|revision| {
+                revision.len() == 64
+                    && revision
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+    })
+}
+
+fn reject_unbound_slot_artifacts(live: &Path) -> Result<()> {
+    let Some(parent) = live.parent() else {
+        return Ok(());
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(user_path_err(
+                "inspect_campaign_root",
+                error.to_string(),
+                parent,
+                true,
+            ));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            user_path_err("inspect_campaign_root", error.to_string(), parent, true)
+        })?;
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        if name.starts_with("campaign.staging-") || name.starts_with("campaign.backup-") {
+            return Err(user_path_err(
+                "unbound_campaign_artifact",
+                "An unbound StarVault campaign staging or backup object remains; move it aside or recover it manually, then check again",
+                entry.path(),
+                false,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn optional_metadata(path: &Path) -> Result<Option<std::fs::Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(user_path_err(
+            "inspect_campaign_root",
+            error.to_string(),
+            path,
+            true,
+        )),
+    }
 }
 
 fn verify_link_target(link: &Path, expected: &Path) -> Result<()> {

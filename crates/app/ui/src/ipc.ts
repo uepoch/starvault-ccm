@@ -2,10 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ConfigDto,
   ImportOperationSnapshot,
+  ImportProgressPhase,
   LibrarySnapshot,
   MigrationCandidate,
   SavesStatus,
   StartupReport,
+  TranslatorLinkTarget,
 } from "./types";
 
 export const initialize = () => invoke<StartupReport>("initialize");
@@ -20,6 +22,8 @@ export const activatePackage = (id: string, options: ExternalModsOptions = {}) =
 export const playPackage = (id: string, options: ExternalModsOptions = {}) =>
   invoke<void>("play_package", { id, ...options });
 export const restoreVanilla = () => invoke<void>("restore_vanilla");
+export const resolveTranslatorLink = (instanceId: string) =>
+  invoke<TranslatorLinkTarget>("resolve_translator_link", { instanceId });
 
 export const getConfig = () => invoke<ConfigDto>("get_config");
 export const getSavesStatus = () => invoke<SavesStatus>("get_saves_status");
@@ -70,10 +74,9 @@ export const editPackageMetadata = (input: PackageMetadataInput) =>
 
 export interface ImportProgressEvent {
   op_id: string;
-  phase: "extract" | "ingest";
-  files_done: number;
-  files_total: number;
-  current_file: string;
+  phase: ImportProgressPhase;
+  completed: number;
+  total: number;
 }
 
 export interface ConfirmedImport {
@@ -89,6 +92,16 @@ export interface ConfirmedImport {
 export const importApi = {
   analyze: (opId: string, path: string): Promise<ImportOperationSnapshot> =>
     invoke<ImportOperationSnapshot>("import_analyze", { opId, path }),
+  analyzeTranslator: (
+    opId: string,
+    instanceId: string,
+    expectedSize: number,
+  ): Promise<ImportOperationSnapshot> =>
+    invoke<ImportOperationSnapshot>("import_analyze_translator", {
+      opId,
+      instanceId,
+      expectedSize,
+    }),
 
   ingest: (input: ConfirmedImport): Promise<ImportOperationSnapshot> =>
     invoke<ImportOperationSnapshot>("import_ingest", {

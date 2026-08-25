@@ -161,7 +161,10 @@ impl<'a> Workflow<'a> {
 
     pub fn library_snapshot(&self) -> Result<LibrarySnapshot> {
         let mut snapshot = crate::library::scan(self.store)?;
-        let workflow_health = self.cached_health().unwrap_or_else(|| self.health());
+        let workflow_health = match self.cached_health() {
+            Some(health) if health.state == HealthState::Ready => health,
+            _ => self.health(),
+        };
         if workflow_health.state == HealthState::RecoveryRequired {
             snapshot.health.state = HealthState::RecoveryRequired;
         } else if workflow_health.state == HealthState::Drifted
@@ -307,11 +310,20 @@ impl<'a> Workflow<'a> {
     }
 
     pub fn restore_vanilla(&self) -> Result<()> {
-        self.ensure_mutation_ready()?;
+        self.ensure_mutation_checkpoint()?;
         if self.store.active_campaign()?.is_none() {
+            self.layout.validate()?;
+            if PendingOperation::load(self.store.root())?.is_some() {
+                return Err(package_err(
+                    "recovery_required",
+                    "an operation journal remains; complete recovery before repairing the vanilla state",
+                ));
+            }
+            SlotManager::new(self.layout, self.store).repair_vanilla_orphan()?;
             self.verify_state_ready(None)?;
             return Ok(());
         }
+        self.ensure_mutation_ready()?;
         self.transition(OperationKind::Restore, None)
     }
 

@@ -21,7 +21,8 @@ use crate::filesystem::is_link_or_reparse as is_link;
 use crate::identity::PackageId;
 use crate::layout::SlotId;
 use crate::package::import::{
-    is_safe_package_path_segment, ArchiveLimits, ImportProgress, CANCELLATION_CHUNK_BYTES,
+    is_safe_package_path_segment, is_safe_translator_id, ArchiveLimits, ImportProgress,
+    CANCELLATION_CHUNK_BYTES,
 };
 use crate::package::normalize::PackagePlan;
 
@@ -55,6 +56,8 @@ pub struct PackageManifest {
     pub desc: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub translator_id: Option<String>,
     pub files: Vec<ManifestFile>,
 }
 
@@ -275,7 +278,7 @@ impl Store {
     }
 
     pub fn ingest(&self, id: &PackageId, faction: SlotId, plan: &PackagePlan) -> Result<String> {
-        self.ingest_with_progress(id, faction, plan, |_| true)?
+        self.ingest_with_progress(id, faction, plan, None, |_| true)?
             .ok_or_else(|| package_err("import_cancelled", "package ingestion was cancelled"))
     }
 
@@ -287,12 +290,19 @@ impl Store {
         id: &PackageId,
         faction: SlotId,
         plan: &PackagePlan,
+        translator_id: Option<&str>,
         mut on_progress: impl FnMut(ImportProgress) -> bool,
     ) -> Result<Option<String>> {
         self.reject_pending_operation()?;
         self.reject_active_package(id)?;
         self.validate_package_for_write(id)?;
         validate_plan(plan)?;
+        if translator_id.is_some_and(|value| !is_safe_translator_id(value)) {
+            return Err(package_err(
+                "invalid_manifest_translator_id",
+                "package manifest has an invalid translator id",
+            ));
+        }
         let source_sizes = plan
             .files
             .iter()
@@ -383,6 +393,7 @@ impl Store {
                 .as_ref()
                 .and_then(|metadata| metadata.desc.clone()),
             imported_at: Some(unix_timestamp()),
+            translator_id: translator_id.map(str::to_owned),
             files,
         };
         validate_manifest(id, &manifest)?;
@@ -1376,6 +1387,16 @@ fn validate_manifest(expected_id: &PackageId, manifest: &PackageManifest) -> Res
                 "manifest id `{}` does not match package directory `{expected_id}`",
                 manifest.id
             ),
+        ));
+    }
+    if manifest
+        .translator_id
+        .as_deref()
+        .is_some_and(|value| !is_safe_translator_id(value))
+    {
+        return Err(package_err(
+            "invalid_manifest_translator_id",
+            "package manifest has an invalid translator id",
         ));
     }
     validate_manifest_files(&manifest.files)?;

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.5] - 2026-08-25
+
+- Translator jobs can open `starvault://install/translator/<id>` to confirm,
+  download, and import a campaign. Reopening the link offers to activate the
+  installed package without downloading it again.
+- Startup and mutation recovery repair provably StarVault-owned orphaned
+  campaign links while preserving their deployments and any saved vanilla tree.
+- Clear all data keeps application data intact when the configured game path
+  is invalid and directs the user to repair the path before retrying.
+
 ## [0.2.4] - 2026-08-25
 
 - Fix startup and shutdown panics caused by Aptabase work running outside

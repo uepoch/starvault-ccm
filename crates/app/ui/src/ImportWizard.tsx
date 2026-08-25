@@ -19,15 +19,15 @@ import { toCommandError } from "./errors";
 import { FACTION_COLORS, SLOTS } from "./factions";
 import { importReducer, initialImportState } from "./importState";
 import { activatePackage, importApi, type ImportProgressEvent } from "./ipc";
-import type { CommandError } from "./types";
+import type { CommandError, ImportSource } from "./types";
 
 interface ImportWizardProps {
   knownIds: Set<string>;
   activePackageId: string | null;
   disabled?: boolean;
   onImported: () => void | Promise<void>;
-  pendingZip: string | null;
-  onZipConsumed: () => void;
+  pendingSource: ImportSource | null;
+  onSourceConsumed: () => void;
 }
 
 export default function ImportWizard({
@@ -35,8 +35,8 @@ export default function ImportWizard({
   activePackageId,
   disabled = false,
   onImported,
-  pendingZip,
-  onZipConsumed,
+  pendingSource,
+  onSourceConsumed,
 }: ImportWizardProps) {
   const [opened, setOpened] = useState(false);
   const [workflow, dispatch] = useReducer(importReducer, initialImportState);
@@ -48,7 +48,7 @@ export default function ImportWizard({
   const [faction, setFaction] = useState("");
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [importedId, setImportedId] = useState<string | null>(null);
-  const [archivePath, setArchivePath] = useState<string | null>(null);
+  const [importSource, setImportSource] = useState<ImportSource | null>(null);
   const [activating, setActivating] = useState(false);
   const [actionError, setActionError] = useState<CommandError | null>(null);
   const [cleanupError, setCleanupError] = useState<CommandError | null>(null);
@@ -70,7 +70,7 @@ export default function ImportWizard({
     setFaction("");
     setWarningsOpen(false);
     setImportedId(null);
-    setArchivePath(null);
+    setImportSource(null);
     setActionError(null);
     setCleanupError(null);
   }, []);
@@ -96,25 +96,20 @@ export default function ImportWizard({
     }
   }, [resetLocalState]);
 
-  const startAnalyze = useCallback(async (droppedPath?: string) => {
+  const startAnalyze = useCallback(async (source?: ImportSource) => {
     if (disabledRef.current) return;
     const generation = generationRef.current + 1;
     generationRef.current = generation;
-    let selected = droppedPath ?? null;
+    let selected = source ?? null;
     if (!selected) {
-      selected = await open({
+      const path = await open({
         multiple: false,
         directory: false,
         filters: [{ name: "Package", extensions: ["zip"] }],
       });
+      if (typeof path === "string") selected = { kind: "path", path };
     }
-    if (
-      generationRef.current !== generation ||
-      disabledRef.current ||
-      !selected ||
-      Array.isArray(selected)
-    )
-      return;
+    if (generationRef.current !== generation || disabledRef.current || !selected) return;
 
     const previous = workflowRef.current;
     if (previous.opId) {
@@ -130,12 +125,15 @@ export default function ImportWizard({
     if (generationRef.current !== generation) return;
 
     const opId = crypto.randomUUID();
-    setArchivePath(selected);
+    setImportSource(selected);
     dispatch({ type: "analyze", opId });
     setActionError(null);
     setCleanupError(null);
     try {
-      const operation = await importApi.analyze(opId, selected);
+      const operation =
+        selected.kind === "path"
+          ? await importApi.analyze(opId, selected.path)
+          : await importApi.analyzeTranslator(opId, selected.instanceId, selected.expectedSize);
       if (generationRef.current !== generation) return;
       if (operation.state !== "Ready" || !operation.preview) {
         throw new Error("Import analysis did not return a preview.");
@@ -155,8 +153,8 @@ export default function ImportWizard({
   }, []);
 
   useEffect(() => {
-    if (!pendingZip) return;
-    onZipConsumed();
+    if (!pendingSource) return;
+    onSourceConsumed();
     if (disabled) {
       notifications.show({
         color: "red",
@@ -165,14 +163,18 @@ export default function ImportWizard({
       return;
     }
     setOpened(true);
-    void startAnalyze(pendingZip);
-  }, [disabled, onZipConsumed, pendingZip, startAnalyze]);
+    void startAnalyze(pendingSource);
+  }, [disabled, onSourceConsumed, pendingSource, startAnalyze]);
 
   useEffect(() => {
     const unlisten = listen<ImportProgressEvent>("import-progress", (event) => {
       if (event.payload.op_id !== workflowRef.current.opId) return;
-      const { files_done: done, files_total: total } = event.payload;
-      dispatch({ type: "progress", value: total > 0 ? (done / total) * 100 : 0 });
+      const { completed, total, phase } = event.payload;
+      dispatch({
+        type: "progress",
+        phase,
+        value: total > 0 ? (completed / total) * 100 : 0,
+      });
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -328,7 +330,9 @@ export default function ImportWizard({
 
           {workflow.state === "Analyzing" && (
             <Stack gap="xs" justify="center" flex={1}>
-              <Text size="sm">Analyzing package…</Text>
+              <Text size="sm">
+                {workflow.phase === "download" ? "Downloading campaign…" : "Analyzing package…"}
+              </Text>
               <Progress value={workflow.progress} animated />
             </Stack>
           )}
@@ -424,7 +428,7 @@ export default function ImportWizard({
                   }
                   onClick={
                     workflow.state === "Failed"
-                      ? () => void startAnalyze(archivePath ?? undefined)
+                      ? () => void startAnalyze(importSource ?? undefined)
                       : startIngest
                   }
                 >

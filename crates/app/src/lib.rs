@@ -9,6 +9,8 @@ mod commands;
 mod telemetry;
 
 use tauri::Manager;
+#[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_updater::UpdaterExt;
 
 /// Transparent self-update: check once at startup, and if a newer release
@@ -62,10 +64,13 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(analytics::plugin())
         .setup(|app| {
+            #[cfg(all(debug_assertions, any(target_os = "windows", target_os = "linux")))]
+            app.deep_link().register_all()?;
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             commands::validate_regular_directory(&data_dir, "unsafe_app_data")?;
@@ -92,7 +97,9 @@ pub fn run() {
             commands::workflow::activate_package,
             commands::workflow::play_package,
             commands::workflow::restore_vanilla,
+            commands::imports::resolve_translator_link,
             commands::imports::import_analyze,
+            commands::imports::import_analyze_translator,
             commands::imports::import_ingest,
             commands::imports::import_cancel,
             commands::settings::get_config,

@@ -7,7 +7,7 @@ use svccm_core::contracts::HealthState;
 use svccm_core::error::user_err;
 use svccm_core::identity::PackageId;
 use svccm_core::layout::{SlotId, WindowsLayout};
-use svccm_core::operation::{OperationPhase, PendingOperation};
+use svccm_core::operation::{OperationKind, OperationPaths, OperationPhase, PendingOperation};
 use svccm_core::package::normalize::plan_from_extracted;
 use svccm_core::store::Store;
 use svccm_core::workflow::{FailurePoint, Workflow};
@@ -102,6 +102,28 @@ fn remove_directory_link(link: &Path) {
 #[cfg(windows)]
 fn remove_directory_link(link: &Path) {
     std::fs::remove_dir(link).unwrap();
+}
+
+#[cfg(any(unix, windows))]
+fn make_owned_orphan(fixture: &Fixture) -> std::path::PathBuf {
+    let revision = "a".repeat(64);
+    let target = fixture
+        .store
+        .root()
+        .join("deploy")
+        .join(format!("lotv-{revision}"));
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("deployment-sentinel"), b"keep deployment").unwrap();
+    std::fs::create_dir_all(fixture.layout.campaign_dir().parent().unwrap()).unwrap();
+    create_directory_link(&target, &fixture.layout.campaign_dir());
+    target
+}
+
+#[cfg(any(unix, windows))]
+fn assert_directory_link(path: &Path) {
+    assert!(svccm_core::filesystem::is_link_or_reparse(
+        &std::fs::symlink_metadata(path).unwrap()
+    ));
 }
 
 #[test]
@@ -217,6 +239,184 @@ fn vanilla_health_preserves_an_exact_owned_slot_operation_artifact() {
 
     assert_eq!(fixture.workflow().health().state, HealthState::Ready);
     assert_eq!(std::fs::read(artifact).unwrap(), b"pending");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn orphaned_owned_campaign_restores_the_preserved_vanilla_directory() {
+    let fixture = Fixture::new();
+    let target = make_owned_orphan(&fixture);
+    std::fs::create_dir_all(fixture.layout.plain_campaign_dir()).unwrap();
+    std::fs::write(
+        fixture.layout.plain_campaign_dir().join("vanilla-sentinel"),
+        b"keep vanilla",
+    )
+    .unwrap();
+    std::fs::create_dir_all(fixture.layout.mods_dir()).unwrap();
+    std::fs::write(
+        fixture.layout.mods_dir().join("unknown.SC2Mod"),
+        b"keep mod",
+    )
+    .unwrap();
+    let verifications = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&verifications);
+    let workflow = fixture.workflow().with_verification_probe(move || {
+        observed.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let health = workflow.health();
+    assert_eq!(health.state, HealthState::Drifted);
+    assert_eq!(health.issues[0].code, "orphaned_starvault_campaign");
+    let live_path = fixture.layout.campaign_dir().display().to_string();
+    assert_eq!(health.issues[0].path.as_deref(), Some(live_path.as_str()));
+
+    workflow.restore_vanilla().unwrap();
+    assert_eq!(
+        std::fs::read(fixture.layout.campaign_dir().join("vanilla-sentinel")).unwrap(),
+        b"keep vanilla"
+    );
+    assert!(!fixture.layout.plain_campaign_dir().exists());
+    assert_eq!(
+        std::fs::read(target.join("deployment-sentinel")).unwrap(),
+        b"keep deployment"
+    );
+    assert_eq!(
+        std::fs::read(fixture.layout.mods_dir().join("unknown.SC2Mod")).unwrap(),
+        b"keep mod"
+    );
+    assert_eq!(verifications.load(Ordering::SeqCst), 2);
+    assert_eq!(workflow.health().state, HealthState::Ready);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn orphaned_owned_campaign_without_a_preserved_directory_removes_only_the_link() {
+    let fixture = Fixture::new();
+    let target = make_owned_orphan(&fixture);
+
+    fixture.workflow().restore_vanilla().unwrap();
+
+    assert!(fixture.layout.campaign_dir().symlink_metadata().is_err());
+    assert_eq!(
+        std::fs::read(target.join("deployment-sentinel")).unwrap(),
+        b"keep deployment"
+    );
+    assert_eq!(fixture.workflow().health().state, HealthState::Ready);
+}
+
+#[test]
+fn missing_campaign_root_restores_the_preserved_vanilla_directory() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.layout.plain_campaign_dir()).unwrap();
+    std::fs::write(
+        fixture.layout.plain_campaign_dir().join("vanilla-sentinel"),
+        b"keep vanilla",
+    )
+    .unwrap();
+
+    assert_eq!(
+        fixture.workflow().health().issues[0].code,
+        "orphaned_starvault_campaign"
+    );
+    fixture.workflow().restore_vanilla().unwrap();
+
+    assert_eq!(
+        std::fs::read(fixture.layout.campaign_dir().join("vanilla-sentinel")).unwrap(),
+        b"keep vanilla"
+    );
+    assert!(!fixture.layout.plain_campaign_dir().exists());
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn ambiguous_or_unsafe_vanilla_states_are_never_mutated() {
+    let foreign_fixture = Fixture::new();
+    let foreign = foreign_fixture._temp.path().join("foreign-campaign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    std::fs::write(foreign.join("sentinel"), b"foreign").unwrap();
+    std::fs::create_dir_all(foreign_fixture.layout.campaign_dir().parent().unwrap()).unwrap();
+    create_directory_link(&foreign, &foreign_fixture.layout.campaign_dir());
+    let error = foreign_fixture.workflow().restore_vanilla().unwrap_err();
+    assert_eq!(error.code(), "unowned_campaign_slot_link");
+    assert_directory_link(&foreign_fixture.layout.campaign_dir());
+    assert_eq!(std::fs::read(foreign.join("sentinel")).unwrap(), b"foreign");
+
+    let copy_fixture = Fixture::new();
+    std::fs::create_dir_all(copy_fixture.layout.campaign_dir()).unwrap();
+    std::fs::create_dir_all(copy_fixture.layout.plain_campaign_dir()).unwrap();
+    std::fs::write(copy_fixture.layout.campaign_dir().join("live"), b"live").unwrap();
+    std::fs::write(
+        copy_fixture.layout.plain_campaign_dir().join("plain"),
+        b"plain",
+    )
+    .unwrap();
+    let error = copy_fixture.workflow().restore_vanilla().unwrap_err();
+    assert_eq!(error.code(), "ambiguous_campaign_state");
+    assert_eq!(
+        std::fs::read(copy_fixture.layout.campaign_dir().join("live")).unwrap(),
+        b"live"
+    );
+    assert_eq!(
+        std::fs::read(copy_fixture.layout.plain_campaign_dir().join("plain")).unwrap(),
+        b"plain"
+    );
+
+    let unsafe_fixture = Fixture::new();
+    std::fs::create_dir_all(unsafe_fixture.layout.plain_campaign_dir().parent().unwrap()).unwrap();
+    std::fs::write(unsafe_fixture.layout.plain_campaign_dir(), b"unsafe").unwrap();
+    let error = unsafe_fixture.workflow().restore_vanilla().unwrap_err();
+    assert_eq!(error.code(), "unsafe_preserved_campaign");
+    assert_eq!(
+        std::fs::read(unsafe_fixture.layout.plain_campaign_dir()).unwrap(),
+        b"unsafe"
+    );
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn running_game_pending_journal_and_unbound_artifacts_block_orphan_repair() {
+    let running_fixture = Fixture::new();
+    let running_target = make_owned_orphan(&running_fixture);
+    let error = Workflow::new(&running_fixture.layout, &running_fixture.store)
+        .with_running_probe(|| true)
+        .restore_vanilla()
+        .unwrap_err();
+    assert_eq!(error.code(), "game_running");
+    assert_directory_link(&running_fixture.layout.campaign_dir());
+    assert!(running_target.join("deployment-sentinel").is_file());
+
+    let pending_fixture = Fixture::new();
+    let pending_target = make_owned_orphan(&pending_fixture);
+    PendingOperation::new_preparing(
+        "pending-repair".into(),
+        OperationKind::Activate,
+        None,
+        None,
+        OperationPaths::default(),
+    )
+    .persist(pending_fixture.store.root())
+    .unwrap();
+    let error = pending_fixture.workflow().restore_vanilla().unwrap_err();
+    assert_eq!(error.code(), "recovery_required");
+    assert_directory_link(&pending_fixture.layout.campaign_dir());
+    assert!(pending_target.join("deployment-sentinel").is_file());
+
+    let artifact_fixture = Fixture::new();
+    let artifact_target = make_owned_orphan(&artifact_fixture);
+    let artifact = artifact_fixture
+        .layout
+        .campaign_dir()
+        .with_file_name("Campaign.staging-unbound");
+    std::fs::create_dir_all(&artifact).unwrap();
+    std::fs::write(artifact.join("sentinel"), b"artifact").unwrap();
+    let error = artifact_fixture.workflow().restore_vanilla().unwrap_err();
+    assert_eq!(error.code(), "unbound_campaign_artifact");
+    assert_directory_link(&artifact_fixture.layout.campaign_dir());
+    assert!(artifact_target.join("deployment-sentinel").is_file());
+    assert_eq!(
+        std::fs::read(artifact.join("sentinel")).unwrap(),
+        b"artifact"
+    );
 }
 
 #[test]

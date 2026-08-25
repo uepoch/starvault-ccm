@@ -5,20 +5,26 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use svccm_core::layout::SlotId;
 use svccm_core::package::import::{
-    extract_archive, preview_plan, ImportOperationSnapshot, ImportOperationState, ImportProgress,
+    extract_archive, is_safe_translator_id, preview_plan, ArchiveLimits, ImportOperationSnapshot,
+    ImportOperationState, ImportPreview,
 };
 use svccm_core::package::metadata::LegacyMetadata;
 use svccm_core::package::normalize::plan_from_extracted;
 use svccm_core::PackageId;
 use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWriteExt;
 
 use super::{ensure_game_stopped, AppState, CommandResult};
 
 const CANCELLATION_WAIT_ATTEMPTS: usize = 200;
 const CANCELLATION_WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+const TRANSLATOR_STATUS_URL: &str = "https://starvault.dev/api/status";
+const TRANSLATOR_DOWNLOAD_URL: &str = "https://starvault.dev/api/download";
+const TRANSLATOR_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub(super) struct ImportOp {
     scratch: PathBuf,
+    translator_id: Option<String>,
     cancel: Arc<AtomicBool>,
     snapshot: ImportOperationSnapshot,
     cleanup_started: bool,
@@ -28,9 +34,99 @@ pub(super) struct ImportOp {
 struct ProgressEvent {
     op_id: String,
     phase: &'static str,
-    files_done: u64,
-    files_total: u64,
-    current_file: String,
+    completed: u64,
+    total: u64,
+}
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TranslatorLinkTarget {
+    Installed {
+        package_id: String,
+        title: Option<String>,
+        active: bool,
+    },
+    Download {
+        filename: String,
+        size: u64,
+    },
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TranslatorStatusResponse {
+    status: String,
+    filename: Option<String>,
+    output: Option<TranslatorStatusOutput>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TranslatorStatusOutput {
+    #[serde(rename = "outputSize")]
+    output_size: Option<u64>,
+}
+
+fn translator_error(
+    code: &'static str,
+    message: &'static str,
+    retryable: bool,
+) -> svccm_core::Error {
+    svccm_core::error::UserError {
+        code: code.into(),
+        message: message.into(),
+        path: None,
+        retryable,
+    }
+    .into()
+}
+
+fn validate_translator_id(instance_id: &str) -> svccm_core::error::Result<()> {
+    if is_safe_translator_id(instance_id) {
+        Ok(())
+    } else {
+        Err(svccm_core::error::user_err(
+            "invalid_translator_id",
+            "the translator id is invalid",
+        ))
+    }
+}
+
+fn parse_translator_status(
+    response: TranslatorStatusResponse,
+) -> svccm_core::error::Result<(String, u64)> {
+    if response.status != "complete" {
+        return Err(translator_error(
+            "translation_not_ready",
+            "The translated campaign is not ready to download yet.",
+            true,
+        ));
+    }
+    let filename = response
+        .filename
+        .as_deref()
+        .and_then(|value| value.rsplit(['/', '\\']).next())
+        .map(str::trim)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 255
+                && !value.chars().any(char::is_control)
+                && std::path::Path::new(value)
+                    .extension()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        })
+        .map(str::to_owned);
+    let size = response.output.and_then(|output| output.output_size);
+    match (filename, size) {
+        (Some(filename), Some(size))
+            if (1..=ArchiveLimits::default().max_total_bytes).contains(&size) =>
+        {
+            Ok((filename, size))
+        }
+        _ => Err(translator_error(
+            "translation_metadata_invalid",
+            "StarVault could not read the translation download details.",
+            true,
+        )),
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -68,16 +164,16 @@ fn emit_progress(
     app: &AppHandle,
     operation_id: &str,
     phase: &'static str,
-    progress: ImportProgress,
+    completed: u64,
+    total: u64,
 ) {
     let _ = app.emit(
         "import-progress",
         ProgressEvent {
             op_id: operation_id.into(),
             phase,
-            files_done: progress.files_done,
-            files_total: progress.files_total,
-            current_file: progress.current_file,
+            completed,
+            total,
         },
     );
 }
@@ -256,6 +352,7 @@ async fn register_analysis(
     state: &AppState,
     operation_id: &str,
     scratch: &Path,
+    translator_id: Option<String>,
     cancel: Arc<AtomicBool>,
 ) -> svccm_core::error::Result<()> {
     // Clear-all holds this lock from its cancellation sweep through deletion.
@@ -282,6 +379,7 @@ async fn register_analysis(
         operation_id.to_string(),
         ImportOp {
             scratch: scratch.to_path_buf(),
+            translator_id,
             cancel,
             snapshot: ImportOperationSnapshot {
                 op_id: operation_id.to_string(),
@@ -372,6 +470,364 @@ fn combine_cleanup_error(
     )
 }
 
+fn extract_preview(
+    app: &AppHandle,
+    operation_id: &str,
+    archive: &Path,
+    scratch: &Path,
+    archive_name: Option<&str>,
+    cancel: &AtomicBool,
+) -> svccm_core::error::Result<Option<ImportPreview>> {
+    let completed = extract_archive(archive, scratch, |progress| {
+        emit_progress(
+            app,
+            operation_id,
+            "extract",
+            progress.files_done,
+            progress.files_total,
+        );
+        !cancel.load(Ordering::Relaxed)
+    })?;
+    if !completed {
+        return Ok(None);
+    }
+    let plan = plan_from_extracted(scratch)?;
+    Ok(Some(preview_plan(&plan, archive_name)))
+}
+
+async fn complete_analysis(
+    app: &AppHandle,
+    state: &AppState,
+    operation: &str,
+    operation_id: &str,
+    result: CommandResult<Option<ImportPreview>>,
+) -> CommandResult<ImportOperationSnapshot> {
+    match result {
+        Ok(Some(preview)) => {
+            let (cancelled, snapshot) = {
+                let mut operations = lock_ops(&state.import_ops)
+                    .map_err(|error| super::error::report(app, state, operation, error))?;
+                let Some(import) = operations.get_mut(operation_id) else {
+                    return Err(super::error::report(
+                        app,
+                        state,
+                        operation,
+                        svccm_core::error::internal_err(
+                            "import_operation_lost",
+                            "StarVault lost the import operation",
+                            "operation disappeared before analysis completed",
+                        ),
+                    ));
+                };
+                let cancelled = import.cancel.load(Ordering::Relaxed);
+                if !cancelled {
+                    import.snapshot.state = ImportOperationState::Ready;
+                    import.snapshot.preview = Some(preview);
+                }
+                (cancelled, import.snapshot.clone())
+            };
+            if !cancelled {
+                return Ok(snapshot);
+            }
+            let cleanup = finish_operation(
+                state,
+                operation_id,
+                ImportOperationState::Cancelled,
+                None,
+                None,
+            )
+            .await;
+            match cleanup {
+                Ok(()) => Err(super::error::report(
+                    app,
+                    state,
+                    operation,
+                    svccm_core::error::user_err(
+                        "import_cancelled",
+                        "package analysis was cancelled",
+                    ),
+                )),
+                Err(error) => Err(super::error::report(app, state, operation, error)),
+            }
+        }
+        Ok(None) => {
+            let cleanup = finish_operation(
+                state,
+                operation_id,
+                ImportOperationState::Cancelled,
+                None,
+                None,
+            )
+            .await;
+            match cleanup {
+                Ok(()) => Err(super::error::report(
+                    app,
+                    state,
+                    operation,
+                    svccm_core::error::user_err(
+                        "import_cancelled",
+                        "package analysis was cancelled",
+                    ),
+                )),
+                Err(error) => Err(super::error::report(app, state, operation, error)),
+            }
+        }
+        Err(command_error) => {
+            let original = svccm_core::error::user_err(
+                command_error.code.clone(),
+                command_error.message.clone(),
+            );
+            match finish_operation(
+                state,
+                operation_id,
+                ImportOperationState::Failed,
+                None,
+                Some(command_error.code.clone()),
+            )
+            .await
+            {
+                Ok(()) => Err(command_error),
+                Err(cleanup) => Err(super::error::report(
+                    app,
+                    state,
+                    operation,
+                    combine_cleanup_error(original, cleanup),
+                )),
+            }
+        }
+    }
+}
+
+async fn download_translator_archive(
+    app: &AppHandle,
+    operation_id: &str,
+    import_root: &Path,
+    instance_id: &str,
+    expected_size: u64,
+    cancel: &AtomicBool,
+) -> svccm_core::error::Result<Option<tempfile::TempPath>> {
+    if cancel.load(Ordering::Relaxed) {
+        return Ok(None);
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(TRANSLATOR_REQUEST_TIMEOUT)
+        .read_timeout(TRANSLATOR_REQUEST_TIMEOUT)
+        .build()
+        .map_err(|_| {
+            translator_error(
+                "translation_download_failed",
+                "StarVault could not download the translated campaign.",
+                true,
+            )
+        })?;
+    let mut response = client
+        .get(format!(
+            "{TRANSLATOR_DOWNLOAD_URL}?instanceId={instance_id}"
+        ))
+        .send()
+        .await
+        .map_err(|_| {
+            translator_error(
+                "translation_download_failed",
+                "StarVault could not download the translated campaign.",
+                true,
+            )
+        })?;
+    if matches!(
+        response.status(),
+        reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
+    ) {
+        return Err(translator_error(
+            "translation_unavailable",
+            "The translated campaign is no longer available. Return to the translation page and rebuild or keep the download.",
+            false,
+        ));
+    }
+    if !response.status().is_success() {
+        return Err(translator_error(
+            "translation_download_failed",
+            "StarVault could not download the translated campaign.",
+            true,
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length != expected_size)
+    {
+        return Err(translator_error(
+            "translation_download_changed",
+            "The translated campaign changed after confirmation. Open the link again to review its new download size.",
+            false,
+        ));
+    }
+
+    let temporary = tempfile::NamedTempFile::new_in(import_root).map_err(|_| {
+        translator_error(
+            "translation_download_failed",
+            "StarVault could not download the translated campaign.",
+            true,
+        )
+    })?;
+    let (file, path) = temporary.into_parts();
+    let mut file = tokio::fs::File::from_std(file);
+    let mut downloaded = 0_u64;
+    emit_progress(app, operation_id, "download", 0, expected_size);
+    while let Some(chunk) = response.chunk().await.map_err(|_| {
+        translator_error(
+            "translation_download_failed",
+            "StarVault could not download the translated campaign.",
+            true,
+        )
+    })? {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        let next = downloaded
+            .checked_add(chunk.len() as u64)
+            .filter(|size| *size <= expected_size)
+            .ok_or_else(|| {
+                translator_error(
+                    "translation_download_changed",
+                    "The translated campaign changed after confirmation. Open the link again to review its new download size.",
+                    false,
+                )
+            })?;
+        file.write_all(&chunk).await.map_err(|_| {
+            translator_error(
+                "translation_download_failed",
+                "StarVault could not download the translated campaign.",
+                true,
+            )
+        })?;
+        downloaded = next;
+        emit_progress(app, operation_id, "download", downloaded, expected_size);
+    }
+    if downloaded != expected_size {
+        return Err(translator_error(
+            "translation_download_changed",
+            "The translated campaign changed after confirmation. Open the link again to review its new download size.",
+            false,
+        ));
+    }
+    file.flush().await.map_err(|_| {
+        translator_error(
+            "translation_download_failed",
+            "StarVault could not download the translated campaign.",
+            true,
+        )
+    })?;
+    drop(file);
+    Ok(Some(path))
+}
+
+fn installed_translator_target(
+    store: &svccm_core::store::Store,
+    instance_id: &str,
+) -> svccm_core::error::Result<Option<TranslatorLinkTarget>> {
+    let Some(manifest) = store
+        .all_manifests()?
+        .into_iter()
+        .find(|manifest| manifest.translator_id.as_deref() == Some(instance_id))
+    else {
+        return Ok(None);
+    };
+    let active = store.active_campaign()?.as_ref().is_some_and(|campaign| {
+        campaign.id == manifest.id
+            && campaign.revision == manifest.revision
+            && campaign.faction == manifest.faction
+    });
+    Ok(Some(TranslatorLinkTarget::Installed {
+        package_id: manifest.id.to_string(),
+        title: manifest.title,
+        active,
+    }))
+}
+
+#[tauri::command]
+pub async fn resolve_translator_link(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    instance_id: String,
+) -> CommandResult<TranslatorLinkTarget> {
+    super::error::map(
+        &app,
+        &state,
+        "resolve_translator_link",
+        validate_translator_id(&instance_id),
+    )?;
+    let store = super::error::map(&app, &state, "resolve_translator_link", state.store())?;
+    if let Some(target) = super::error::map(
+        &app,
+        &state,
+        "resolve_translator_link",
+        installed_translator_target(&store, &instance_id),
+    )? {
+        return Ok(target);
+    }
+
+    let result = async {
+        let client = reqwest::Client::builder()
+            .connect_timeout(TRANSLATOR_REQUEST_TIMEOUT)
+            .read_timeout(TRANSLATOR_REQUEST_TIMEOUT)
+            .build()
+            .map_err(|_| {
+                translator_error(
+                    "translation_status_failed",
+                    "StarVault could not check the translated campaign.",
+                    true,
+                )
+            })?;
+        let response = client
+            .get(format!(
+                "{TRANSLATOR_STATUS_URL}?instanceId={instance_id}&includeOptions=true"
+            ))
+            .send()
+            .await
+            .map_err(|_| {
+                translator_error(
+                    "translation_status_failed",
+                    "StarVault could not check the translated campaign.",
+                    true,
+                )
+            })?;
+        if matches!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::GONE
+        ) {
+            return Err(translator_error(
+                "translation_unavailable",
+                "The translated campaign is no longer available. Return to the translation page and rebuild or keep the download.",
+                false,
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(translator_error(
+                "translation_status_failed",
+                "StarVault could not check the translated campaign.",
+                true,
+            ));
+        }
+        let body = response.bytes().await.map_err(|_| {
+            translator_error(
+                "translation_status_failed",
+                "StarVault could not check the translated campaign.",
+                true,
+            )
+        })?;
+        let status = serde_json::from_slice(&body).map_err(|_| {
+            translator_error(
+                "translation_status_failed",
+                "StarVault could not check the translated campaign.",
+                true,
+            )
+        })?;
+        let (filename, size) = parse_translator_status(status)?;
+        Ok(TranslatorLinkTarget::Download { filename, size })
+    }
+    .await;
+    super::error::map(&app, &state, "resolve_translator_link", result)
+}
+
 #[tauri::command]
 pub async fn import_analyze(
     app: AppHandle,
@@ -418,7 +874,7 @@ pub async fn import_analyze(
         &app,
         &state,
         "import_analyze",
-        register_analysis(&state, &op_id, &scratch, cancel.clone()).await,
+        register_analysis(&state, &op_id, &scratch, None, cancel.clone()).await,
     )?;
 
     let worker_app = app.clone();
@@ -428,101 +884,114 @@ pub async fn import_analyze(
         .file_stem()
         .map(|name| name.to_string_lossy().into_owned());
     let result = super::error::blocking(&app, &state, "import_analyze", move || {
-        let completed = extract_archive(&archive, &worker_scratch, |progress| {
-            emit_progress(&worker_app, &worker_id, "extract", progress);
-            !cancel.load(Ordering::Relaxed)
-        })?;
-        if !completed {
-            return Ok(None);
-        }
-        let plan = plan_from_extracted(&worker_scratch)?;
-        Ok(Some(preview_plan(&plan, archive_name.as_deref())))
+        extract_preview(
+            &worker_app,
+            &worker_id,
+            &archive,
+            &worker_scratch,
+            archive_name.as_deref(),
+            &cancel,
+        )
     })
     .await;
+    complete_analysis(&app, &state, "import_analyze", &op_id, result).await
+}
 
-    match result {
-        Ok(Some(preview)) => {
-            let (cancelled, snapshot) = {
-                let mut operations = lock_ops(&state.import_ops)
-                    .map_err(|error| super::error::report(&app, &state, "import_analyze", error))?;
-                let Some(operation) = operations.get_mut(&op_id) else {
-                    return Err(super::error::report(
-                        &app,
-                        &state,
-                        "import_analyze",
-                        svccm_core::error::internal_err(
-                            "import_operation_lost",
-                            "StarVault lost the import operation",
-                            "operation disappeared before analysis completed",
-                        ),
-                    ));
-                };
-                let cancelled = operation.cancel.load(Ordering::Relaxed);
-                if !cancelled {
-                    operation.snapshot.state = ImportOperationState::Ready;
-                    operation.snapshot.preview = Some(preview.clone());
-                }
-                (cancelled, operation.snapshot.clone())
-            };
-            if cancelled {
-                let cleanup =
-                    finish_operation(&state, &op_id, ImportOperationState::Cancelled, None, None)
-                        .await;
-                return match cleanup {
-                    Ok(()) => Err(super::error::report(
-                        &app,
-                        &state,
-                        "import_analyze",
-                        svccm_core::error::user_err(
-                            "import_cancelled",
-                            "package analysis was cancelled",
-                        ),
-                    )),
-                    Err(error) => Err(super::error::report(&app, &state, "import_analyze", error)),
-                };
-            }
-            Ok(snapshot)
-        }
-        Ok(None) => {
-            let cleanup =
-                finish_operation(&state, &op_id, ImportOperationState::Cancelled, None, None).await;
-            match cleanup {
-                Ok(()) => Err(super::error::report(
-                    &app,
-                    &state,
-                    "import_analyze",
-                    svccm_core::error::user_err(
-                        "import_cancelled",
-                        "package analysis was cancelled",
-                    ),
-                )),
-                Err(error) => Err(super::error::report(&app, &state, "import_analyze", error)),
-            }
-        }
-        Err(command_error) => {
-            let original = svccm_core::error::user_err(
-                command_error.code.clone(),
-                command_error.message.clone(),
-            );
-            match finish_operation(
-                &state,
-                &op_id,
-                ImportOperationState::Failed,
-                None,
-                Some(command_error.code.clone()),
-            )
-            .await
-            {
-                Ok(()) => Err(command_error),
-                Err(cleanup) => Err(super::error::report(
-                    &app,
-                    &state,
-                    "import_analyze",
-                    combine_cleanup_error(original, cleanup),
-                )),
-            }
-        }
+#[tauri::command]
+pub async fn import_analyze_translator(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    op_id: String,
+    instance_id: String,
+    expected_size: u64,
+) -> CommandResult<ImportOperationSnapshot> {
+    super::error::map(
+        &app,
+        &state,
+        "import_analyze_translator",
+        validate_operation_id(&op_id),
+    )?;
+    super::error::map(
+        &app,
+        &state,
+        "import_analyze_translator",
+        validate_translator_id(&instance_id),
+    )?;
+    if !(1..=ArchiveLimits::default().max_total_bytes).contains(&expected_size) {
+        return Err(super::error::report(
+            &app,
+            &state,
+            "import_analyze_translator",
+            translator_error(
+                "translation_metadata_invalid",
+                "StarVault could not read the translation download details.",
+                true,
+            ),
+        ));
     }
+
+    let scratch = state.import_root.join(&op_id);
+    let cancel = Arc::new(AtomicBool::new(false));
+    super::error::map(
+        &app,
+        &state,
+        "import_analyze_translator",
+        register_analysis(
+            &state,
+            &op_id,
+            &scratch,
+            Some(instance_id.clone()),
+            cancel.clone(),
+        )
+        .await,
+    )?;
+
+    let archive = match super::error::map(
+        &app,
+        &state,
+        "import_analyze_translator",
+        download_translator_archive(
+            &app,
+            &op_id,
+            &state.import_root,
+            &instance_id,
+            expected_size,
+            &cancel,
+        )
+        .await,
+    ) {
+        Ok(Some(archive)) => archive,
+        Ok(None) => {
+            return complete_analysis(&app, &state, "import_analyze_translator", &op_id, Ok(None))
+                .await;
+        }
+        Err(error) => {
+            return complete_analysis(
+                &app,
+                &state,
+                "import_analyze_translator",
+                &op_id,
+                Err(error),
+            )
+            .await;
+        }
+    };
+
+    let worker_app = app.clone();
+    let worker_id = op_id.clone();
+    let worker_scratch = scratch.clone();
+    let result = super::error::blocking(&app, &state, "import_analyze_translator", move || {
+        extract_preview(
+            &worker_app,
+            &worker_id,
+            archive.as_ref(),
+            &worker_scratch,
+            Some("translated-campaign"),
+            &cancel,
+        )
+    })
+    .await;
+    complete_analysis(&app, &state, "import_analyze_translator", &op_id, result).await
 }
 
 fn apply_confirmed_metadata(
@@ -540,7 +1009,7 @@ fn claim_ready_ingest(
     operations: &Mutex<std::collections::HashMap<String, ImportOp>>,
     operation_id: &str,
     ensure_stopped: impl FnOnce() -> svccm_core::error::Result<()>,
-) -> svccm_core::error::Result<(PathBuf, Arc<AtomicBool>)> {
+) -> svccm_core::error::Result<(PathBuf, Option<String>, Arc<AtomicBool>)> {
     // Check the process state before claiming the operation. Changing Ready to
     // Ingesting makes cancellation wait for a worker, so it counts as mutation.
     ensure_stopped()?;
@@ -558,7 +1027,11 @@ fn claim_ready_ingest(
         ));
     }
     operation.snapshot.state = ImportOperationState::Ingesting;
-    Ok((operation.scratch.clone(), operation.cancel.clone()))
+    Ok((
+        operation.scratch.clone(),
+        operation.translator_id.clone(),
+        operation.cancel.clone(),
+    ))
 }
 
 #[tauri::command]
@@ -574,7 +1047,7 @@ pub async fn import_ingest(
     let package_id = super::error::map(&app, &state, "import_ingest", PackageId::parse(id))?;
     let faction = super::error::map(&app, &state, "import_ingest", slot.parse::<SlotId>())?;
     let _mutation = state.mutation.lock().await;
-    let (scratch, cancel) = super::error::map(
+    let (scratch, translator_id, cancel) = super::error::map(
         &app,
         &state,
         "import_ingest",
@@ -589,10 +1062,22 @@ pub async fn import_ingest(
         if let Some(meta) = meta {
             apply_confirmed_metadata(&mut plan, meta);
         }
-        store.ingest_with_progress(&package_id, faction, &plan, |progress| {
-            emit_progress(&worker_app, &worker_id, "ingest", progress);
-            !cancel.load(Ordering::Relaxed)
-        })
+        store.ingest_with_progress(
+            &package_id,
+            faction,
+            &plan,
+            translator_id.as_deref(),
+            |progress| {
+                emit_progress(
+                    &worker_app,
+                    &worker_id,
+                    "ingest",
+                    progress.files_done,
+                    progress.files_total,
+                );
+                !cancel.load(Ordering::Relaxed)
+            },
+        )
     })
     .await;
 
@@ -878,6 +1363,7 @@ mod tests {
     fn ready_operation(scratch: PathBuf) -> ImportOp {
         ImportOp {
             scratch,
+            translator_id: None,
             cancel: Arc::new(AtomicBool::new(false)),
             snapshot: ImportOperationSnapshot {
                 op_id: "operation-1".into(),
@@ -900,6 +1386,110 @@ mod tests {
             );
         }
         assert!(validate_operation_id(&"a".repeat(97)).is_err());
+    }
+    fn status(value: serde_json::Value) -> svccm_core::error::Result<(String, u64)> {
+        parse_translator_status(serde_json::from_value(value).unwrap())
+    }
+
+    #[test]
+    fn translator_ids_enforce_the_shared_safe_contract() {
+        assert!(validate_translator_id("upload-wpRtPJWdAa").is_ok());
+        for invalid in [
+            "",
+            "wpRtPJWdAa",
+            "upload-",
+            "upload-with.dot",
+            "upload-with/slash",
+            &format!("upload-{}", "a".repeat(65)),
+        ] {
+            assert!(
+                validate_translator_id(invalid).is_err(),
+                "accepted {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn translator_status_requires_complete_bounded_zip_metadata() {
+        let valid = serde_json::json!({
+            "status": "complete",
+            "filename": "folder\\\\Project UED (WOL) 3.0.3.zip",
+            "output": { "outputSize": 538740099 }
+        });
+        assert_eq!(
+            status(valid.clone()).unwrap(),
+            ("Project UED (WOL) 3.0.3.zip".into(), 538_740_099)
+        );
+
+        let mut cases = vec![
+            serde_json::json!({
+                "status": "processing",
+                "filename": "campaign.zip",
+                "output": { "outputSize": 1 }
+            }),
+            serde_json::json!({
+                "status": "complete",
+                "filename": "campaign.zip",
+                "output": {}
+            }),
+            serde_json::json!({
+                "status": "complete",
+                "output": { "outputSize": 1 }
+            }),
+            serde_json::json!({
+                "status": "complete",
+                "filename": "campaign.zip",
+                "output": { "outputSize": 0 }
+            }),
+            serde_json::json!({
+                "status": "complete",
+                "filename": "campaign.zip",
+                "output": { "outputSize": 8589934593_u64 }
+            }),
+        ];
+        for filename in [
+            "campaign.txt".to_string(),
+            "campaign\u{0007}.zip".to_string(),
+            format!("{}.zip", "a".repeat(252)),
+        ] {
+            cases.push(serde_json::json!({
+                "status": "complete",
+                "filename": filename,
+                "output": { "outputSize": 1 }
+            }));
+        }
+        for invalid in cases {
+            assert!(status(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn installed_translator_lookup_returns_the_manifest_without_network_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let state = test_state(&temporary);
+        let source = temporary.path().join("source");
+        std::fs::create_dir_all(source.join("campaign.SC2Map")).unwrap();
+        std::fs::write(source.join("campaign.SC2Map/payload"), b"payload").unwrap();
+        let package_id = PackageId::parse("translated").unwrap();
+        let store = state.store().unwrap();
+        store
+            .ingest_with_progress(
+                &package_id,
+                SlotId::LotV,
+                &plan_from_extracted(&source).unwrap(),
+                Some("upload-wpRtPJWdAa"),
+                |_| true,
+            )
+            .unwrap();
+
+        assert_eq!(
+            installed_translator_target(&store, "upload-wpRtPJWdAa").unwrap(),
+            Some(TranslatorLinkTarget::Installed {
+                package_id: "translated".into(),
+                title: None,
+                active: false,
+            })
+        );
     }
 
     #[test]
@@ -951,6 +1541,7 @@ mod tests {
                 &state,
                 "operation-1",
                 &scratch,
+                None,
                 Arc::new(AtomicBool::new(false)),
             ));
             let first_poll =

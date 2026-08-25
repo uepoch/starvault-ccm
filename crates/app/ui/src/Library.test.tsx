@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MantineProvider } from "@mantine/core";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { listLibrary } from "./ipc";
+import { listLibrary, restoreVanilla } from "./ipc";
 import Library from "./Library";
 import type { LibrarySnapshot } from "./types";
 
@@ -59,7 +59,7 @@ const readySnapshot: LibrarySnapshot = {
 function renderLibrary() {
   return render(
     <MantineProvider defaultColorScheme="dark">
-      <Library pendingZip={null} onZipConsumed={vi.fn()} />
+      <Library openRequest={null} onRequestConsumed={vi.fn()} />
     </MantineProvider>,
   );
 }
@@ -134,5 +134,88 @@ describe("Library", () => {
     expect((screen.getByRole("button", { name: "Activate" }) as HTMLButtonElement).disabled).toBe(
       true,
     );
+  });
+
+  it("shows the issue path and repairs a provably owned orphan after confirmation", async () => {
+    const orphaned: LibrarySnapshot = {
+      ...readySnapshot,
+      active_campaign: null,
+      health: {
+        state: "drifted",
+        issues: [
+          {
+            code: "orphaned_starvault_campaign",
+            message: "StarVault can safely restore the preserved vanilla campaign state",
+            path: "C:\\StarCraft II\\Maps\\Campaign",
+          },
+        ],
+      },
+    };
+    vi.mocked(listLibrary)
+      .mockResolvedValueOnce(orphaned)
+      .mockResolvedValueOnce({ ...orphaned, health: { state: "ready", issues: [] } });
+    vi.mocked(restoreVanilla).mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderLibrary();
+
+    expect(await screen.findByText("C:\\StarCraft II\\Maps\\Campaign")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Repair vanilla state…" }));
+
+    await waitFor(() => expect(restoreVanilla).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledTimes(2));
+    expect(confirm).toHaveBeenCalledWith(
+      "StarVault will restore the preserved campaign directory and will not delete unknown Mods. Continue?",
+    );
+  });
+
+  it("rescans every warning but offers Repair only for an owned orphan", async () => {
+    const warning: LibrarySnapshot = {
+      ...readySnapshot,
+      active_campaign: null,
+      health: {
+        state: "drifted",
+        issues: [
+          {
+            code: "ambiguous_campaign_state",
+            message: "Manual recovery is required.",
+            path: "C:\\StarCraft II\\Maps\\Campaign.starvault-plain",
+          },
+        ],
+      },
+    };
+    vi.mocked(listLibrary).mockResolvedValue(warning);
+    renderLibrary();
+
+    await screen.findByText("Manual recovery is required.");
+    expect(screen.queryByRole("button", { name: "Repair vanilla state…" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(listLibrary).toHaveBeenCalledTimes(2));
+  });
+
+  it("shows the mapped repair error", async () => {
+    vi.mocked(listLibrary).mockResolvedValue({
+      ...readySnapshot,
+      active_campaign: null,
+      health: {
+        state: "drifted",
+        issues: [
+          {
+            code: "orphaned_starvault_campaign",
+            message: "Repair is available.",
+          },
+        ],
+      },
+    });
+    vi.mocked(restoreVanilla).mockRejectedValue({
+      kind: "environment",
+      code: "game_running",
+      message: "Close StarCraft II before repairing.",
+      retryable: true,
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderLibrary();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Repair vanilla state…" }));
+    expect(await screen.findByText("Close StarCraft II before repairing.")).toBeTruthy();
   });
 });

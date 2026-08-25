@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "deep-link:default",
     "updater:default",
     "aptabase:allow-track-event"
   ]

@@ -97,6 +97,7 @@ export type ImportOperationState =
   | "Cancelled"
   | "Failed"
   | "Completed";
+export type ImportProgressPhase = "download" | "extract" | "ingest";
 
 export interface ImportOperationSnapshot {
   op_id: string;
@@ -105,6 +106,26 @@ export interface ImportOperationSnapshot {
   revision?: string;
   error_code?: string;
 }
+export type TranslatorLinkTarget =
+  | {
+      kind: "installed";
+      package_id: string;
+      title: string | null;
+      active: boolean;
+    }
+  | {
+      kind: "download";
+      filename: string;
+      size: number;
+    };
+
+export type OpenRequest =
+  | { kind: "path"; path: string }
+  | { kind: "translator"; instanceId: string };
+
+export type ImportSource =
+  | { kind: "path"; path: string }
+  | { kind: "translator"; instanceId: string; expectedSize: number };
 
 export interface MigrationCandidate {
   candidate_id: string;

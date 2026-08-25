@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrent, onOpenUrl } from "@tauri-apps/plugin-deep-link";
 import {
   Alert,
   Box,
@@ -18,12 +19,13 @@ import { Notifications, notifications } from "@mantine/notifications";
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import ChangelogButton from "./ChangelogButton";
+import { parseTranslatorInstallUrl } from "./deepLinks";
 import { toCommandError } from "./errors";
 import { discoverGameExe, getConfig, initialize, saveConfig, setAnalytics } from "./ipc";
 import Library from "./Library";
 import Log from "./Log";
 import Settings from "./Settings";
-import type { CommandError, StartupReport } from "./types";
+import type { CommandError, OpenRequest, StartupReport } from "./types";
 
 const theme = createTheme({
   primaryColor: "blue",
@@ -32,7 +34,7 @@ const theme = createTheme({
 
 function AppShell() {
   const [tab, setTab] = useState<string | null>("library");
-  const [pendingZip, setPendingZip] = useState<string | null>(null);
+  const [openRequest, setOpenRequest] = useState<OpenRequest | null>(null);
   const [startup, setStartup] = useState<StartupReport | null>(null);
   const [startupError, setStartupError] = useState<CommandError | null>(null);
   const [analyticsPrompt, setAnalyticsPrompt] = useState(false);
@@ -95,11 +97,30 @@ function AppShell() {
           message: `Importing ${zip.split(/[\\/]/).pop()}…`,
         });
         setTab("library");
-        setPendingZip(zip);
+        setOpenRequest({ kind: "path", path: zip });
       })
       .then((fn) => {
         unlisten = fn;
       });
+    return () => unlisten?.();
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    const openFirstValid = (urls: string[]) => {
+      for (const url of urls) {
+        const instanceId = parseTranslatorInstallUrl(url);
+        if (!instanceId) continue;
+        setTab("library");
+        setOpenRequest({ kind: "translator", instanceId });
+        break;
+      }
+    };
+    void getCurrent().then((urls) => {
+      if (urls) openFirstValid(urls);
+    });
+    void onOpenUrl(openFirstValid).then((fn) => {
+      unlisten = fn;
+    });
     return () => unlisten?.();
   }, []);
 
@@ -145,7 +166,7 @@ function AppShell() {
         )}
 
         <Tabs.Panel value="library">
-          <Library pendingZip={pendingZip} onZipConsumed={() => setPendingZip(null)} />
+          <Library openRequest={openRequest} onRequestConsumed={() => setOpenRequest(null)} />
         </Tabs.Panel>
         <Tabs.Panel value="log">
           <Log />

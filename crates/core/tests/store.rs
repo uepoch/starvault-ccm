@@ -8,7 +8,7 @@ use svccm_core::layout::SlotId;
 use svccm_core::operation::{OperationKind, OperationPaths, PendingOperation};
 use svccm_core::package::metadata::LegacyMetadata;
 use svccm_core::package::normalize::plan_from_extracted;
-use svccm_core::store::{ManagedMod, ManagedModDisposition, Store};
+use svccm_core::store::{ManagedMod, ManagedModDisposition, PackageManifest, Store};
 
 fn map_container(directory: &Path, content: &[u8]) {
     std::fs::create_dir_all(directory).unwrap();
@@ -73,6 +73,45 @@ fn creates_only_the_version_two_single_campaign_schema() {
         .unwrap();
     assert_eq!(version, 2);
     assert_eq!(tables, ["active_campaign", "managed_mods"]);
+}
+
+#[test]
+fn translator_provenance_persists_and_local_replacement_clears_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("store");
+    let source = tmp.path().join("source");
+    map_container(&source.join("campaign.SC2Map"), b"payload");
+    let id = PackageId::parse("alpha").unwrap();
+
+    {
+        let store = Store::open_for_tests(&root).unwrap();
+        store
+            .ingest_with_progress(
+                &id,
+                SlotId::LotV,
+                &plan(&source),
+                Some("upload-wpRtPJWdAa"),
+                |_| true,
+            )
+            .unwrap();
+    }
+
+    let store = Store::open_for_tests(&root).unwrap();
+    let manifest = store.load_manifest(&id).unwrap();
+    assert_eq!(manifest.translator_id.as_deref(), Some("upload-wpRtPJWdAa"));
+
+    let mut old_manifest = serde_json::to_value(&manifest).unwrap();
+    old_manifest
+        .as_object_mut()
+        .unwrap()
+        .remove("translator_id");
+    let old_manifest: PackageManifest = serde_json::from_value(old_manifest).unwrap();
+    assert_eq!(old_manifest.translator_id, None);
+
+    store
+        .ingest_with_progress(&id, SlotId::LotV, &plan(&source), None, |_| true)
+        .unwrap();
+    assert_eq!(store.load_manifest(&id).unwrap().translator_id, None);
 }
 
 #[test]
@@ -380,7 +419,7 @@ fn ingestion_cancels_during_a_large_file_and_cleans_staging() {
     let id = PackageId::parse("alpha").unwrap();
     let mut checks = 0;
     let result = store
-        .ingest_with_progress(&id, SlotId::LotV, &plan(&source), |_| {
+        .ingest_with_progress(&id, SlotId::LotV, &plan(&source), None, |_| {
             checks += 1;
             checks < 3
         })
@@ -410,7 +449,7 @@ fn ingestion_reports_and_retains_an_unsafe_staging_cleanup_target() {
     let mut staged_link = None;
 
     let error = store
-        .ingest_with_progress(&id, SlotId::LotV, &plan(&source), |_| {
+        .ingest_with_progress(&id, SlotId::LotV, &plan(&source), None, |_| {
             if staged_link.is_none() {
                 let temporary = std::fs::read_dir(root.join("blob-staging"))
                     .unwrap()
