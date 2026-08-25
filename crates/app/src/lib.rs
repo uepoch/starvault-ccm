@@ -48,6 +48,10 @@ pub fn run() {
     use tracing_subscriber::util::SubscriberInitExt;
     tracing_subscriber::registry().init();
 
+    // Aptabase starts its polling task while Tauri initializes plugins, so
+    // enter Tauri's Tokio context before building the application.
+    let runtime = tauri::async_runtime::handle();
+    let _runtime_guard = runtime.inner().enter();
     tauri::Builder::default()
         // Must be the FIRST plugin: a second app instance exits here and
         // focuses the existing window instead.

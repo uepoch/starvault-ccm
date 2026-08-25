@@ -57,7 +57,7 @@ pub fn flush_on_exit(app: &AppHandle) {
     }
     let app = app.clone();
     let (sent, done) = std::sync::mpsc::channel::<()>();
-    std::thread::spawn(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         app.flush_events_blocking();
         let _ = sent.send(());
     });

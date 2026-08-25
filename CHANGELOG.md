@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.4] - 2026-08-25
+
+- Fix startup and shutdown panics caused by Aptabase work running outside
+  Tauri's Tokio runtime.
+
 ## [0.2.3] - 2026-08-24
 
 - Return to vanilla now discards changed files created by StarVault while
